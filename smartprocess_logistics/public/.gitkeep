@@ -1,0 +1,3 @@
+# Keeps `public/` in version control. Frappe serves this directory at
+# /assets/smartprocess_logistics, and the Compose override bind-mounts it into the frontend
+# container, so the directory must exist before the stack is started with that file.

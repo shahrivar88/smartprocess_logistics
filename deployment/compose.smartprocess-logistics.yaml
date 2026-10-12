@@ -1,0 +1,87 @@
+# Optional Docker wiring for this app. The application itself never reads this file, and it
+# contains no site name, port or container name of its own.
+#
+# How it attaches the app to an existing frappe_docker stack:
+#
+#   1. The repository is bind-mounted at the bench's `apps/` directory, so the code is present
+#      in every service.
+#   2. `smartprocess_logistics.pth` is bind-mounted into the environment's `site-packages`,
+#      which puts the app on `sys.path` for every Python service.
+#
+# Why a `.pth` file instead of `PYTHONPATH`: a Compose `environment:` entry replaces the
+# variable instead of appending to it. This stack already sets `PYTHONPATH` on `backend`,
+# `queue-short`, `queue-long` and `scheduler` to the path list of five other apps, so setting
+# it here would silently drop those imports. The `.pth` file adds one path without touching
+# the variable. `site-packages` lives in the image rather than on a volume, so the mount is
+# re-created from this file on every container recreate.
+#
+# Required environment variable, set in the stack's `.env`:
+#
+#   SMARTPROCESS_LOGISTICS_APP_PATH=<absolute path to this repository>
+#
+# List this file after the others, and start only what is needed:
+#
+#   docker compose -p <project> -f compose.yaml ... \
+#     -f <repo>/deployment/compose.smartprocess-logistics.yaml up -d --dry-run
+#
+# Verify with `docker compose ... config` before `up`. A run without this file reports the
+# mounted app as absent; it does not remove anything.
+#
+# Rollback: bring the stack up again without this file, or drop these two volumes.
+#
+# This file intentionally does not mention the `backend-ptm-test` or `frontend-ptm-test`
+# services. They serve a different site and this app is not wired into them.
+
+x-logistics-app: &logistics-app
+  type: bind
+  source: ${SMARTPROCESS_LOGISTICS_APP_PATH}
+  target: /home/frappe/frappe-bench/apps/smartprocess_logistics
+
+x-logistics-pth: &logistics-pth
+  type: bind
+  source: ${SMARTPROCESS_LOGISTICS_APP_PATH}/deployment/smartprocess_logistics.pth
+  target: /home/frappe/frappe-bench/env/lib/python3.14/site-packages/smartprocess_logistics.pth
+  read_only: true
+
+x-logistics-assets: &logistics-assets
+  type: bind
+  source: ${SMARTPROCESS_LOGISTICS_APP_PATH}/smartprocess_logistics/public
+  target: /home/frappe/frappe-bench/assets/smartprocess_logistics
+  read_only: true
+
+services:
+  configurator:
+    volumes:
+      - *logistics-app
+      - *logistics-pth
+
+  backend:
+    volumes:
+      - *logistics-app
+      - *logistics-pth
+
+  frontend:
+    volumes:
+      - *logistics-app
+      - *logistics-pth
+      - *logistics-assets
+
+  websocket:
+    volumes:
+      - *logistics-app
+      - *logistics-pth
+
+  queue-short:
+    volumes:
+      - *logistics-app
+      - *logistics-pth
+
+  queue-long:
+    volumes:
+      - *logistics-app
+      - *logistics-pth
+
+  scheduler:
+    volumes:
+      - *logistics-app
+      - *logistics-pth

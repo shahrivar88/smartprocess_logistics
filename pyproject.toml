@@ -1,0 +1,43 @@
+[project]
+name = "smartprocess_logistics"
+authors = [
+    { name = "Smart Process", email = "info@smartprocess.local" }
+]
+description = "Optional warranty serial numbers for Sales Invoice item rows"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    # Reads `.xlsx` for the import feature. Already present in any ERPNext v16 environment,
+    # and declared so that installing this app elsewhere brings it. Every other module in the
+    # app uses the standard library only.
+    "openpyxl>=3.1,<4",
+]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.bench.frappe-dependencies]
+frappe = ">=16.0.0,<17.0.0"
+erpnext = ">=16.0.0,<17.0.0"
+
+[tool.ruff]
+line-length = 110
+# The floor this app declares for itself, so Ruff never proposes syntax the
+# declared minimum cannot parse.
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "B"]
+ignore = [
+    "E501", # line length is the formatter's business, not a lint rule
+    "W191", # this project indents with tabs, matching .editorconfig
+    "E101", # tabs for indentation with spaces for alignment is that same convention
+]
+
+[tool.ruff.format]
+# Frappe and this project's .editorconfig indent Python with tabs. Without this
+# the formatter rewrites every file to spaces: a whole-repository change nobody
+# asked for, and a silent break with the framework's own style.
+indent-style = "tab"

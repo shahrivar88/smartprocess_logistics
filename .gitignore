@@ -1,0 +1,33 @@
+# Python bytecode and build output
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# An isolated virtual environment, used to run the database-free tests on a machine that is
+# not a bench. It is disposable: recreate it with `python -m venv .venv`.
+.venv/
+.venv-*/
+
+# Local environment files. Never commit real values.
+.env
+.env.*
+!.env.example
+
+# Node tooling
+node_modules/
+
+# Claude Code personal settings for this project. The shared parts of `.claude/`
+# (skills, agents) are committed; this file is one operator's own overrides and
+# can hold local values that do not belong in history.
+.claude/settings.local.json
+
+# Operating system noise
+.DS_Store
+Thumbs.db

@@ -1,0 +1,7 @@
+# Line endings are LF in the repository and in the working tree.
+#
+# `.editorconfig` already requires LF, and this app runs inside a Linux container,
+# so a CRLF working copy would be a difference that shows up in every diff and in
+# nothing else. Git for Windows turns on `core.autocrlf` by default; this file
+# overrides that for every clone rather than relying on a local setting.
+* text=auto eol=lf
