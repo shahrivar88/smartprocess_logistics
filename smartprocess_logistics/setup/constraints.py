@@ -5,8 +5,11 @@
 running it on every migrate is safe. It commits before the ALTER, which is why it is called
 from `after_migrate` and never from a request handler.
 
-The DocType schema sync may rebuild a table, so these are declared again on every migrate
-rather than created once at install.
+These are asserted at install and again on every migrate. Not because v16's schema sync drops
+them — it does not, for columns the DocType metadata still declares with `search_index` — but
+because the check is one parameterized read of `information_schema`, which makes re-asserting
+free, and because a site restored from an older dump or left half-installed would otherwise
+never get them.
 
 Why the assignment constraint is on a stored copy
 -------------------------------------------------
@@ -52,14 +55,22 @@ UNIQUE_CONSTRAINTS = (
 )
 
 
-def _constraint_columns(doctype, constraint_name):
-	"""The columns a constraint name currently covers, in order, or `()` when absent.
+def _index_state(doctype, constraint_name):
+	"""The columns an index name covers, in order, and whether that index is unique.
 
 	Read from `information_schema`, parameterized, and touching no application table.
+
+	The uniqueness flag is read as well as the columns because two different catalogues are
+	involved: this reads `STATISTICS`, which lists indexes, while `frappe.db.add_unique` looks
+	the name up in `TABLE_CONSTRAINTS`, which lists unique constraints. A plain, non-unique
+	index carrying one of these names would therefore look like a constraint here and be
+	invisible there — the guard would skip it and the uniqueness would never be applied, while
+	`add_unique` would have failed loudly on the duplicate name. Reading the flag closes that
+	gap instead of leaving it to chance.
 	"""
 	rows = frappe.db.sql(
 		"""
-		select COLUMN_NAME
+		select COLUMN_NAME, NON_UNIQUE
 		from information_schema.STATISTICS
 		where TABLE_SCHEMA = database()
 		  and TABLE_NAME = %(table)s
@@ -69,21 +80,35 @@ def _constraint_columns(doctype, constraint_name):
 		{"table": f"tab{doctype}", "constraint": constraint_name},
 	)
 
-	return tuple(row[0] for row in rows)
+	if not rows:
+		return (), False
+
+	return tuple(row[0] for row in rows), not any(row[1] for row in rows)
 
 
 def ensure_unique_constraints():
 	"""Create the composite unique constraints. Safe to run repeatedly.
 
-	A constraint whose name already exists over *different* columns stops the migration
-	instead of being silently accepted, because the name would then claim to enforce a rule it
-	does not enforce.
+	Two states stop the migration rather than being accepted silently, because in both the name
+	would claim to enforce a rule it does not enforce:
+
+	- the name exists over **different** columns;
+	- the name exists over the right columns but as a **non-unique** index.
 	"""
 	for doctype, fields, constraint_name in UNIQUE_CONSTRAINTS:
 		if not frappe.db.exists("DocType", doctype):
 			continue
 
-		existing = _constraint_columns(doctype, constraint_name)
+		existing, is_unique = _index_state(doctype, constraint_name)
+
+		if existing and not is_unique:
+			frappe.throw(
+				_(
+					"{0} on {1} is an index but not a unique constraint, so it does not enforce"
+					" what its name claims. Drop it and run migrate again."
+				).format(frappe.bold(constraint_name), frappe.bold(doctype)),
+				title=_("Constraint name is taken by a plain index"),
+			)
 
 		if existing and existing != tuple(fields):
 			frappe.throw(

@@ -39,14 +39,37 @@ flag was when an invoice was written, and no historical snapshot has been approv
 
 ## Status
 
-Phase 1 Step 5 — data model, logic, import engine and the secure API layer, app not
-installable yet.
+Phase 2 Step 1 — installation lifecycle prepared, app still not installed.
 
 The six DocType definitions, the role structure, the install-time helpers, the pure business
 logic, a database-independent import engine and the whitelisted endpoints all exist, and
 everything that decides anything is covered by tests. The endpoints are **inactive**: the app is
-not installed, `hooks.py` registers no hooks, and `install.py` is complete but unwired. There
-are still no reports and no Desk UI.
+not installed. `hooks.py` now registers `after_install` and `after_migrate`, both idempotent, but
+until the app is mounted on a site they run for nothing. There are still no reports and no Desk
+UI.
+
+### The lifecycle, and why both hooks are registered
+
+`installer.install_app` runs `sync_for` (which creates the tables), commits the app into
+`Installed Applications`, and only then calls `after_install`. It **never** calls `after_migrate`.
+So a fresh install has to create the composite unique constraints itself — a constraint declared
+only in `after_migrate` would be absent on a site that has never been migrated — and a failure
+inside `after_install` leaves a site that reports the app as installed with its work half done.
+`after_migrate` re-asserts all three steps and is what repairs that.
+
+`seeds.seed_settings` writes `Logistics Settings.installed_on` **last**, so an install that stops
+before the end leaves the timestamp empty and is repaired by the next migrate rather than being
+mistaken for a finished one. A recorded timestamp is never overwritten, and each seed table is
+filled only when it is empty, so a half-written settings row is not seeded twice.
+
+`before_uninstall` is implemented and **not registered**, so a `bench uninstall-app` today drops
+the app's tables with no copy at all. What it will do once registered: write a JSON copy of
+`Logistics Serial`, `Logistics Serial Assignment` and the `Logistics Settings` Single into the
+site's `private/files`, owner-readable only, then stop the uninstall only if that copy cannot be
+written or does not read back as what was prepared. It never refuses an uninstall merely because
+records exist. `Logistics Import Session` is deliberately not copied: its rows are transient and
+it holds the hidden `token` and `payload`. The copies are never deleted by the app — removing the
+only artifact of records that no longer exist is the opposite of the point.
 
 ## Pure logic
 
@@ -207,13 +230,15 @@ submitted later, while manual serial registration on them remains available.
 - Frappe **16.x** and ERPNext **16.x**, declared as `>=16.0.0,<17.0.0`.
 - Python 3.10 or newer.
 
-The app declares no runtime dependency. The XLSX reader is added in the phase that
-implements import, together with its justification.
+The app declares one runtime dependency, `openpyxl`, because the import feature reads `.xlsx`.
+Every other module uses the standard library only, and `core/` uses nothing else at all.
 
 ## Installation
 
-Not available in this phase. Once the app is installable, the standard flow applies and no
-site name, host, port or container path is compiled into the application:
+Not installed anywhere yet. The app is complete enough to install and its two lifecycle hooks
+are registered, but it is not mounted on any stack; that is a separate, explicitly approved
+step. The standard flow applies and no site name, host, port or container path is compiled into
+the application:
 
 ```bash
 bench get-app <repository-url> smartprocess_logistics

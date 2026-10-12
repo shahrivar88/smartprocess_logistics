@@ -6,6 +6,7 @@ Three concerns, one module each:
 - `constraints`: the composite unique constraints that a DocType JSON cannot declare.
 - `seeds`: the values written once, at install time.
 
-Nothing in this package is wired into `hooks.py` yet. `install.py` calls these helpers, and
-`install.py` itself is not registered, so installing this app currently does nothing.
+`install.py` is the only caller, and `hooks.py` registers its `after_install` and `after_migrate`
+entry points. Nothing in this package reads a business document or touches a DocType this app
+does not own.
 """

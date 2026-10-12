@@ -1,8 +1,8 @@
 """Hook configuration for smartprocess_logistics.
 
-No hook below is registered. The lifecycle functions in `install.py` are written and are
-reviewed here, but the lines that would call them stay commented until the step that mounts
-and activates the app, so installing this app currently does nothing at all.
+Two lifecycle hooks are registered. Both are idempotent and neither calls
+`ignore_permissions`. `before_uninstall` is implemented in `install.py` and is deliberately
+left unregistered; the note below says what it waits for.
 """
 
 app_name = "smartprocess_logistics"
@@ -15,17 +15,31 @@ app_license = "mit"
 # Installation is valid only on a site that already runs Frappe and ERPNext.
 required_apps = ["frappe", "erpnext"]
 
-# --- Written, not registered yet ------------------------------------------------------
+# --- Registered -------------------------------------------------------------------------
 #
-# `install.py` implements all three. Each one is idempotent and none of them uses
-# `ignore_permissions`. Activating them is the step that installs the app.
+# Both run the same three idempotent steps: create the three roles, apply the two composite
+# unique constraints, and seed `Logistics Settings`.
 #
-#     after_install = "smartprocess_logistics.install.after_install"
-#     after_migrate = "smartprocess_logistics.install.after_migrate"
+# Both are needed because Frappe v16 calls them at different times and one does not imply the
+# other. `installer.install_app` commits the app into `Installed Applications` *before* it runs
+# `after_install`, and it never runs `after_migrate`; so a fresh install would otherwise have
+# no unique constraints at all, and a failure inside `after_install` would leave a site
+# reporting the app as installed with the work half done. `after_migrate` is what repairs that.
+after_install = "smartprocess_logistics.install.after_install"
+after_migrate = "smartprocess_logistics.install.after_migrate"
+
+# --- Implemented, deliberately not registered -------------------------------------------
+#
+# `smartprocess_logistics.install.before_uninstall` writes a verified JSON copy of this app's
+# records into the site's `private/files`, and stops the uninstall only when that copy cannot
+# be written or does not read back as what was prepared. It does not refuse an uninstall merely
+# because records exist.
+#
+# It stays unregistered until that behaviour has been exercised against a real uninstall on a
+# disposable site, because it is the last hook between a drop and the data. Register it by
+# adding:
+#
 #     before_uninstall = "smartprocess_logistics.install.before_uninstall"
-#
-# The unique constraints are applied by `after_migrate` rather than `after_install`, because
-# a DocType schema sync may rebuild a table and take its indexes with it.
 #
 # Phase 4 — Desk user interface:
 #     doctype_js = {"Sales Invoice": "public/js/sales_invoice_serial_button.js"}
