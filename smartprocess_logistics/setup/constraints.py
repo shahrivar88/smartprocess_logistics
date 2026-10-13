@@ -89,11 +89,21 @@ def _index_state(doctype, constraint_name):
 def ensure_unique_constraints():
 	"""Create the composite unique constraints. Safe to run repeatedly.
 
-	Two states stop the migration rather than being accepted silently, because in both the name
-	would claim to enforce a rule it does not enforce:
+	Three states stop the migration rather than being accepted silently, because in each the
+	name would claim to enforce a rule it does not enforce:
 
 	- the name exists over **different** columns;
-	- the name exists over the right columns but as a **non-unique** index.
+	- the name exists over the right columns but as a **non-unique** index;
+	- `add_unique` returned without the constraint being there afterwards.
+
+	The third is not hypothetical. `frappe.db.add_unique` looks its name up in
+	`TABLE_CONSTRAINTS` filtered by **table name only**, while this guard reads
+	`information_schema.STATISTICS` filtered by schema *and* table. On a bench hosting a second
+	site that runs this app, the two tables share a name across two schemas: the guard sees no
+	constraint here, and `add_unique` finds the other site's row, concludes the name is taken and
+	returns without altering anything — leaving this site's table without the rule and every later
+	migrate repeating the same silent no-op. So the constraint is created and then **looked for**:
+	what the migration believes is enforced is read back from the catalogue that enforces it.
 	"""
 	for doctype, fields, constraint_name in UNIQUE_CONSTRAINTS:
 		if not frappe.db.exists("DocType", doctype):
@@ -107,7 +117,7 @@ def ensure_unique_constraints():
 					"{0} on {1} is an index but not a unique constraint, so it does not enforce"
 					" what its name claims. Drop it and run migrate again."
 				).format(frappe.bold(constraint_name), frappe.bold(doctype)),
-				title=_("Constraint name is taken by a plain index"),
+				title=_("نام قید توسط یک ایندکس ساده اشغال شده است"),
 			)
 
 		if existing and existing != tuple(fields):
@@ -121,8 +131,21 @@ def ensure_unique_constraints():
 					", ".join(existing),
 					", ".join(fields),
 				),
-				title=_("Constraint name is taken by a different rule"),
+				title=_("نام قید توسط قاعدهٔ دیگری اشغال شده است"),
 			)
 
 		if not existing:
 			frappe.db.add_unique(doctype, list(fields), constraint_name)
+
+			created, created_is_unique = _index_state(doctype, constraint_name)
+
+			if not created or not created_is_unique:
+				frappe.throw(
+					_(
+						"{0} on {1} could not be created as a unique constraint. The name may"
+						" already exist in another schema of the same database server, which"
+						" `frappe.db.add_unique` treats as a duplicate. Give the constraint another"
+						" name and run migrate again."
+					).format(frappe.bold(constraint_name), frappe.bold(doctype)),
+					title=_("قید ساخته نشد"),
+				)

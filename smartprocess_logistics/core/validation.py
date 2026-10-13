@@ -186,6 +186,7 @@ def plan_registration(
 	rows,
 	submissions,
 	existing=(),
+	replaced_rows=(),
 	delimiters=(),
 	policy=None,
 	allow_over_quantity=False,
@@ -195,6 +196,14 @@ def plan_registration(
 	`rows` are the invoice item rows, `submissions` are `(row_key, serial text)` pairs in the
 	order the operator supplied them, and `existing` are the assignments already stored on
 	this invoice.
+
+	`replaced_rows` are the rows whose whole set is about to be removed and written again: the
+	one row `set_row_serials` names, and none at all for an import, which adds to the rows a
+	file names. A replaced row's own assignments are counted out below, because they are gone
+	before the new set is written — the set being judged is that row's whole set, so its own
+	serials are not duplicates and are not still on the row when its requirement is compared.
+	A serial that lives on a row which is **not** being replaced stays in the set of
+	already-registered serials, and stays refused.
 	"""
 	policy = policy or normalization.NormalizationPolicy()
 	delimiter_set = delimiter_rules.DelimiterSet.of(delimiters)
@@ -203,6 +212,17 @@ def plan_registration(
 
 	rows_by_key = _index_rows(rows)
 	existing_counts, existing_serials, _ = _index_existing(existing)
+
+	if replaced_rows:
+		replaced = frozenset(replaced_rows)
+		existing_counts = {
+			row_key: count for row_key, count in existing_counts.items() if row_key not in replaced
+		}
+		# Rebuilt from the assignments, not from `_index_existing`'s serial-to-row map: that map
+		# keeps one row per serial, so a serial stored on two rows would be judged by whichever
+		# row it happened to record last. A serial that is still on a row nobody is replacing has
+		# to keep refusing the submission, in either iteration order.
+		existing_serials = {item.normalized_serial for item in existing if item.row_key not in replaced}
 
 	accepted = []
 	issues = []

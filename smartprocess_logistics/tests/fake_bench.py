@@ -30,12 +30,27 @@ import sys
 import tempfile
 import traceback
 import types
+from datetime import datetime
+
+from smartprocess_logistics.core.normalization import NORMALIZATION_VERSION
 
 SETTINGS = "Logistics Settings"
 
 
 class FakeThrow(Exception):
 	"""What `frappe.throw` raises, standing in for `frappe.ValidationError`."""
+
+
+class QueryDeadlockError(Exception):
+	"""Stands in for `frappe.QueryDeadlockError`, which is raised from the driver's error code.
+
+	The cleanup job catches this class, so the fake runtime has to carry it: an `except` clause
+	whose class is missing from the stand-in turns one failure into a different one.
+	"""
+
+
+class QueryTimeoutError(Exception):
+	"""Stands in for `frappe.QueryTimeoutError`, the other way a lock wait ends."""
 
 
 class SettingsDoc:
@@ -46,12 +61,31 @@ class SettingsDoc:
 	apart from a read.
 	"""
 
-	def __init__(self, installed_on=None, delimiters=None, item_markers=None):
+	def __init__(
+		self,
+		installed_on=None,
+		delimiters=None,
+		item_markers=None,
+		normalization_version=NORMALIZATION_VERSION,
+	):
 		self._installed_on = installed_on
 		self.delimiters = [dict(row) for row in (delimiters or [])]
 		self.item_markers = [dict(row) for row in (item_markers or [])]
+		# The shipped default, not a placeholder: `Logistics Settings.normalization_version`
+		# defaults to the code's own rule set, and `schema_checks` refuses a definition where the
+		# two disagree. So a bench built here models a site that is up to date, which is what
+		# makes "a migrate changes nothing" a meaningful assertion. A test that wants the drifted
+		# state passes a lower number and says so.
+		self.normalization_version = int(normalization_version)
+		# `saves` counts completed saves. `save_failures` makes the next that many raise first,
+		# which is how the install on SmartProcessERP behaved when Frappe refused the row.
 		self.saves = 0
+		self.save_failures = 0
 		self.installed_on_writes = []
+		# What a fetch would return: a save that raises writes nothing, so the instance has to
+		# be able to go back to what was last stored. Without this the fake would keep values a
+		# refused save never persisted, and an idempotency test would pass for the wrong reason.
+		self.persisted = self._snapshot()
 
 	@property
 	def installed_on(self):
@@ -69,7 +103,28 @@ class SettingsDoc:
 		getattr(self, table).append(dict(row))
 
 	def save(self):
+		if self.save_failures:
+			self.save_failures -= 1
+			self._roll_back()
+			raise FakeThrow("simulated: a required field was blank")
+
 		self.saves += 1
+		self.persisted = self._snapshot()
+
+	def _snapshot(self):
+		return {
+			"installed_on": self._installed_on,
+			"delimiters": [dict(row) for row in self.delimiters],
+			"item_markers": [dict(row) for row in self.item_markers],
+			"normalization_version": self.normalization_version,
+		}
+
+	def _roll_back(self):
+		"""What Frappe leaves behind when validation refuses a save: the stored state, unchanged."""
+		self._installed_on = self.persisted["installed_on"]
+		self.delimiters = [dict(row) for row in self.persisted["delimiters"]]
+		self.item_markers = [dict(row) for row in self.persisted["item_markers"]]
+		self.normalization_version = self.persisted["normalization_version"]
 
 	def as_dict(self):
 		return {
@@ -77,6 +132,7 @@ class SettingsDoc:
 			"installed_on": self.installed_on,
 			"delimiters": [dict(row) for row in self.delimiters],
 			"item_markers": [dict(row) for row in self.item_markers],
+			"normalization_version": self.normalization_version,
 		}
 
 
@@ -123,13 +179,30 @@ class FakeBench:
 		self.added_unique = []
 		self.get_list_calls = []
 		self.sql_calls = []
+		self.deletions = []
 		self.throws = []
 		self.messages = []
 		self.errors = []
+		self.rollbacks = 0
+		# A server where a constraint name is taken in another schema: `add_unique` returns and
+		# leaves nothing behind. The only way to notice is to read the catalogue back.
+		self.silent_add_unique = False
+		# `(doctype, name)` pairs `delete_doc` refuses, which is how a linked document is modelled.
+		self.delete_failures = set()
 
 	@property
 	def db(self):
 		return self._db
+
+	@property
+	def now_datetime(self):
+		"""`frappe.utils.now_datetime()`: the same clock as `now()`, as a datetime.
+
+		The two are not the same thing in the framework either — `now()` answers with the string
+		a Datetime field stores, `now_datetime()` with a `datetime` — and code that compares an
+		expiry has to get the second one. Handing it the first raised TypeError on this site.
+		"""
+		return datetime.strptime(self.now, "%Y-%m-%d %H:%M:%S.%f")
 
 	def _reject_ignore_permissions(self, where, kwargs):
 		if kwargs.get("ignore_permissions"):
@@ -166,18 +239,50 @@ class FakeBench:
 		if doctype == "DocType":
 			return name in self.doctypes
 		if doctype == "Role":
-			return name in self.roles
+			# Roles are reachable two ways: the set `ensure_roles` inserts into, and a registered
+			# table a test seeded. A site can have either, and `after_uninstall` must see both.
+			if name in self.roles:
+				return True
 
-		raise AssertionError(f"the fake does not implement exists({doctype!r})")
+			if not isinstance(name, dict):
+				return any(row.get("name") == name for row in self.tables.get("Role", []))
 
-	def count(self, doctype):
+			return any(self._matches(row, name) for row in self.tables.get("Role", []))
+
+		if doctype not in self.doctypes:
+			raise AssertionError(f"the fake does not implement exists({doctype!r})")
+
+		rows = self.tables.get(doctype, [])
+
+		if isinstance(name, dict):
+			return any(self._matches(row, name) for row in rows)
+
+		return any(row.get("name") == name for row in rows)
+
+	def count(self, doctype, filters=None):
 		if doctype not in self.doctypes:
 			raise AssertionError(f"the fake does not have a table for {doctype!r}")
 
-		if doctype in self.count_overrides:
+		if doctype in self.count_overrides and not filters:
 			return self.count_overrides[doctype]
 
-		return len(self.tables.get(doctype, []))
+		rows = self.tables.get(doctype, [])
+
+		if filters:
+			return sum(1 for row in rows if self._matches(row, filters))
+
+		return len(rows)
+
+	def _matches(self, row, filters):
+		"""Whether one row satisfies a filter — a value, or `{field: ["in", (...)]}`."""
+		for field, condition in filters.items():
+			if isinstance(condition, (list, tuple)) and len(condition) == 2 and condition[0] == "in":
+				if row.get(field) not in set(condition[1]):
+					return False
+			elif row.get(field) != condition:
+				return False
+
+		return True
 
 	def get_list(self, doctype, **kwargs):
 		self._reject_ignore_permissions(f"get_list({doctype})", kwargs)
@@ -187,12 +292,36 @@ class FakeBench:
 			raise AssertionError(f"the fake does not have a table for {doctype!r}")
 
 		rows = list(self.tables.get(doctype, []))
+		filters = kwargs.get("filters")
+
+		if filters:
+			rows = [row for row in rows if self._matches(row, filters)]
+
 		offset = 0 if self.paging_ignored else kwargs.get("offset", 0)
 		limit = kwargs.get("limit")
 
 		page = rows[offset:] if limit is None else rows[offset : offset + limit]
 
+		if kwargs.get("pluck"):
+			return [row.get(kwargs["pluck"]) for row in page]
+
 		return [dict(row) for row in page]
+
+	def delete_doc(self, doctype, name, **kwargs):
+		self._reject_ignore_permissions(f"delete_doc({doctype})", kwargs)
+
+		if (doctype, name) in self.delete_failures:
+			raise FakeThrow(f"simulated: {doctype} {name} is linked and cannot be deleted")
+
+		self.deletions.append((doctype, name))
+
+		if doctype in self.tables:
+			self.tables[doctype] = [row for row in self.tables[doctype] if row.get("name") != name]
+
+		if doctype == "Role":
+			self.roles.discard(name)
+
+		return name
 
 	def get_single(self, doctype):
 		if doctype != SETTINGS:
@@ -205,22 +334,46 @@ class FakeBench:
 	def get_doc(self, values):
 		return InsertableDoc(self, values)
 
+	def rollback(self):
+		"""What the framework does when a request or a job ends in a failure it caught."""
+		self.rollbacks += 1
+
+		return None
+
 	def sql(self, query, params=None, **kwargs):
+		"""Two kinds of statement, told apart by their parameters.
+
+		A statement whose parameters are a **dict** is the one read of `information_schema` the
+		constraint guard makes, and it is answered from the registered indexes. Everything else —
+		the archive's own statements — is recorded and answered with the next canned result, if a
+		test queued one. The fake does not speak SQL, and no test here pretends it does: what these
+		tests pin is that the statements are parameterized, which rows are projected into them and
+		in which order, and what the code decides. That MariaDB carries the statement out correctly
+		is what the rehearsal in `deployment/lab/` measures on a real site.
+		"""
 		self._reject_ignore_permissions("db.sql", kwargs)
 		self.sql_calls.append({"query": query, "params": params})
 
-		state = self.indexes.get((params["table"], params["constraint"]))
+		if isinstance(params, dict):
+			state = self.indexes.get((params["table"], params["constraint"]))
 
-		if not state:
-			return []
+			if not state:
+				return []
 
-		columns, unique = state
+			columns, unique = state
 
-		# `NON_UNIQUE` is 0 for a unique index, 1 for a plain one — the real column's sense.
-		return [(column, 0 if unique else 1) for column in columns]
+			# `NON_UNIQUE` is 0 for a unique index, 1 for a plain one — the real column's sense.
+			return [(column, 0 if unique else 1) for column in columns]
 
 	def add_unique(self, doctype, fields, constraint_name):
 		self.added_unique.append((doctype, tuple(fields), constraint_name))
+
+		# `silent_add_unique` reproduces what the framework does when the name is already taken in
+		# *another schema* of the same server: it returns without altering anything. The database
+		# here therefore still has no such index, which is what the app's look-back reads.
+		if self.silent_add_unique:
+			return
+
 		self.indexes[(f"tab{doctype}", constraint_name)] = (tuple(fields), True)
 
 	def get_site_path(self, *joins):
@@ -299,7 +452,10 @@ class FakeLifecycle:
 				"get_doc": bench.get_doc,
 				"get_list": bench.get_list,
 				"get_site_path": bench.get_site_path,
+				"delete_doc": bench.delete_doc,
 				"local": types.SimpleNamespace(site=bench.site),
+				"session": types.SimpleNamespace(user="Administrator"),
+				"conf": types.SimpleNamespace(db_name="fake_db"),
 			}
 		)
 
@@ -312,9 +468,12 @@ class FakeLifecycle:
 			return raise_
 
 		frappe.get_all = forbidden("frappe.get_all")
+		frappe.QueryDeadlockError = QueryDeadlockError
+		frappe.QueryTimeoutError = QueryTimeoutError
 
 		utils = types.ModuleType("frappe.utils")
 		utils.now = lambda: bench.now
+		utils.now_datetime = lambda: bench.now_datetime
 		frappe.utils = utils
 
 		bench._db = types.SimpleNamespace(
@@ -324,6 +483,7 @@ class FakeLifecycle:
 			add_unique=bench.add_unique,
 			get_list=bench.get_list,
 			get_all=forbidden("frappe.db.get_all"),
+			rollback=bench.rollback,
 		)
 		frappe.db = bench._db
 

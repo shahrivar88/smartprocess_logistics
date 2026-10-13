@@ -54,6 +54,12 @@ ENDPOINT_LEVELS = {
 	"delete_assignments": MANAGER,
 	"prepare_import_preview": EDITOR,
 	"confirm_import": EDITOR,
+	# Exporting and importing this app's records. An export is a copy of every serial and every
+	# assignment in the site, and an import can create them; both are administrative, so both
+	# need a Manager and neither is offered to a Viewer or an Editor.
+	"export_serials": MANAGER,
+	"preview_serial_restore": MANAGER,
+	"apply_serial_restore": MANAGER,
 }
 
 # Endpoints that a session may only be confirmed by the user who prepared it.

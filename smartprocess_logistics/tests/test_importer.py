@@ -1,5 +1,6 @@
 """The import engine: shapes, layouts, marker grouping and the preview."""
 
+from smartprocess_logistics.core.defaults import DEFAULT_DELIMITERS
 from smartprocess_logistics.core.importer import (
 	CODE_BLANK_TOKENS,
 	CODE_MARKER_ROW_MISSING,
@@ -430,3 +431,37 @@ class TestNothingIsWritten(UnitTestCase):
 		self.assertNotIn("save", dir(preview))
 		self.assertNotIn("insert", dir(preview))
 		self.assertNotIn("commit", dir(preview))
+
+
+class TestTheSpaceDelimiter(UnitTestCase):
+	"""A space-separated file, through the entry point the Desk uses for decoded text.
+
+	`preview_from_text` builds its delimiter set from stored text with
+	`DelimiterSet.of(request.delimiters)`, so a stored `\\s` has to reach the splitter as one
+	space for any of this to work.
+	"""
+
+	def test_serials_separated_by_spaces_and_lines(self):
+		preview = preview_from_text("1*\r\nA1 A2 A3", request(delimiters=("\\s", "\\r\\n", "\\n")))
+
+		self.assertTrue(preview.is_valid)
+		self.assertEqual(
+			preview.submissions(),
+			(("row-1", "A1"), ("row-1", "A2"), ("row-1", "A3")),
+		)
+
+	def test_the_shipped_defaults_parse_the_same_file(self):
+		preview = preview_from_text(
+			"1*\r\nA1 A2\r\n2*\r\nB1",
+			request(delimiters=[stored for _, stored in DEFAULT_DELIMITERS]),
+		)
+
+		self.assertTrue(preview.is_valid)
+		self.assertEqual(preview.submissions(), (("row-1", "A1"), ("row-1", "A2"), ("row-2", "B1")))
+
+	def test_a_literal_space_delimiter_still_parses(self):
+		"""Compatibility with a delimiter configured as a bare space before this change."""
+		preview = preview_from_text("1*\r\nA1 A2", request(delimiters=(" ", "\\r\\n", "\\n")))
+
+		self.assertTrue(preview.is_valid)
+		self.assertEqual(preview.submissions(), (("row-1", "A1"), ("row-1", "A2")))

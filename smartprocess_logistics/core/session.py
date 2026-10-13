@@ -32,7 +32,7 @@ would be guessing about a write that, by construction, this code never made.
 """
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 PREPARED = "Prepared"
 CLAIMED = "Claimed"
@@ -43,6 +43,12 @@ EXPIRED = "Expired"
 STATES = (PREPARED, CLAIMED, APPLIED, FAILED, EXPIRED)
 
 TERMINAL_STATES = (APPLIED, FAILED, EXPIRED)
+
+# The two states something can still happen from, and therefore the only two a cleanup job is
+# allowed to expire. Writing "Expired" over a session that was applied while the cleanup was
+# reading the table would replace the record of an import that did happen with a statement that
+# it did not; the states are therefore part of the update's own condition.
+OPEN_STATES = (PREPARED, CLAIMED)
 
 TRANSITIONS = {
 	PREPARED: (CLAIMED, FAILED, EXPIRED),
@@ -200,3 +206,69 @@ def is_expirable(session, now):
 		return False
 
 	return session.is_expired(now)
+
+
+# How long a finished session's record is kept before a cleanup job may remove it. The row is the
+# only trace of what an import applied — its status, when, and a one-line summary — and it also
+# carries the payload, which is every serial the preview accepted. A month is long enough to
+# answer "what happened to that file" and short enough that the payloads do not accumulate for
+# ever. Not a `Logistics Settings` field: it bounds housekeeping rather than expressing a
+# decision an operator makes, and a value nothing reads is a value that goes stale — which is
+# what `normalization_version` was.
+RETENTION_DAYS = 30
+
+# How many rows one run of the cleanup job may touch, in each of its two steps. Bounded so a site
+# that accumulated thousands of previews is cleaned over several runs rather than in one long
+# transaction, and so an interrupted run leaves only work it had not started.
+PURGE_BATCH = 200
+
+CODE_NOT_TERMINAL = "SESSION_NOT_TERMINAL"
+
+
+def finished_at(session):
+	"""When a session stopped being able to do anything, or `None` while it still can.
+
+	A session that was applied is dated by its apply, and one that expired or failed by the
+	expiry that ended it. A `Prepared` one has not finished, whatever its expiry says: expiring it
+	is the step before this one.
+	"""
+	if session is None or not session.is_terminal():
+		return None
+
+	return session.applied_at or session.claimed_at or session.expires_at
+
+
+def is_purgeable(session, now, retention_days=RETENTION_DAYS):
+	"""Whether a cleanup job may remove this session's record."""
+	finished = finished_at(session)
+
+	if finished is None:
+		return False
+
+	return finished <= now - timedelta(days=retention_days)
+
+
+def select_purgeable(sessions, now, limit=PURGE_BATCH, retention_days=RETENTION_DAYS):
+	"""Up to `limit` sessions a cleanup job may remove, oldest first.
+
+	Oldest first makes a bound an order as well as a ceiling: run after run removes the same
+	queue from its head, so a site that fell behind catches up instead of removing whichever rows
+	the database happened to return.
+	"""
+	purgeable = [
+		session
+		for session in sessions
+		if is_purgeable(session, now, retention_days=retention_days)
+	]
+
+	purgeable.sort(key=lambda session: (finished_at(session), session.name))
+
+	return tuple(session.name for session in purgeable[:limit])
+
+
+def select_expirable(sessions, now, limit=PURGE_BATCH):
+	"""Up to `limit` sessions a cleanup job should mark expired, oldest expiry first."""
+	expirable = [session for session in sessions if is_expirable(session, now)]
+	expirable.sort(key=lambda session: (session.expires_at, session.name))
+
+	return tuple(session.name for session in expirable[:limit])

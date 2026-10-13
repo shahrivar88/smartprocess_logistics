@@ -31,3 +31,15 @@ node_modules/
 # Operating system noise
 .DS_Store
 Thumbs.db
+
+# The isolation lab's throwaway credentials. The stack these belong to is disposable and
+# reproducible from `deployment/lab/compose.isolation-lab.yaml`, but a password is still a
+# password: it lives on disk and out of history.
+deployment/lab/.env.lab
+
+# Local preview helpers. They carry absolute host paths and a port belonging to another project,
+# and they are scaffolding for a browser pane, not part of the app: kept on disk, out of history.
+.claude/launch.json
+.claude/pane_8080.py
+.claude/proof_proxy.py
+.claude/sp_proxy.py

@@ -1,0 +1,249 @@
+# A disposable, isolated stack for rehearsing this app's install/uninstall cycle.
+#
+# Why it exists: the app's own test site lives on a shared stack whose `sites` volume and
+# MariaDB database are also served by a second front door, so a removal rehearsed there is a
+# removal rehearsed against data that is not only this project's. A rehearsal needs a site
+# nothing else can see, and this file is that site.
+#
+# What it is, precisely:
+#
+#   * its own Compose project (`sp-logistics-isolation-lab`), its own network, and its own
+#     named volumes — `sites`, `logs`, `db`, `redis-cache`, `redis-queue`. Nothing here is
+#     shared with the `erpnext` project, and no service in that project reads anything here.
+#   * the same image the main stack runs (`smartprocess/erpnext:v16.35.0-official-apps.1`),
+#     so Frappe and ERPNext are the versions the app is tested against.
+#   * the app itself bind-mounted read-only from the working copy, wired exactly as
+#     `deployment/compose.smartprocess-logistics.yaml` wires it: the repository at `apps/`,
+#     the `.pth` in `site-packages`, and `public/` at `assets/`.
+#   * two published ports, both on loopback only: 8095 for the front end. The database is not
+#     published at all; reach it with `docker compose exec db`.
+#
+# Required, in `deployment/lab/.env.lab` and never in history:
+#
+#   SMARTPROCESS_LOGISTICS_APP_PATH=<absolute path to this repository>
+#   LAB_DB_ROOT_PASSWORD=<throwaway password for this stack's own MariaDB root>
+#
+# Bring it up (the `db`, `redis` and `configurator` services first, then create the site):
+#
+#   docker compose -p sp-logistics-isolation-lab \
+#     --env-file deployment/lab/.env.lab \
+#     -f deployment/lab/compose.isolation-lab.yaml up -d db redis-cache redis-queue configurator
+#
+# Tear it down, with everything it wrote:
+#
+#   docker compose -p sp-logistics-isolation-lab \
+#     --env-file deployment/lab/.env.lab \
+#     -f deployment/lab/compose.isolation-lab.yaml down -v
+#
+# `down -v` deletes the five volumes above. That is the whole point of this stack: it holds
+# nothing that is not reproducible from this repository, and it must never be pointed at a
+# site that matters.
+
+name: sp-logistics-isolation-lab
+
+x-logistics-app: &logistics-app
+  type: bind
+  source: ${SMARTPROCESS_LOGISTICS_APP_PATH}
+  target: /home/frappe/frappe-bench/apps/smartprocess_logistics
+  read_only: true
+
+x-logistics-pth: &logistics-pth
+  type: bind
+  source: ${SMARTPROCESS_LOGISTICS_APP_PATH}/deployment/smartprocess_logistics.pth
+  target: /home/frappe/frappe-bench/env/lib/python3.14/site-packages/smartprocess_logistics.pth
+  read_only: true
+
+x-logistics-assets: &logistics-assets
+  type: bind
+  source: ${SMARTPROCESS_LOGISTICS_APP_PATH}/smartprocess_logistics/public
+  target: /home/frappe/frappe-bench/assets/smartprocess_logistics
+  read_only: true
+
+x-frappe-image: &frappe-image smartprocess/erpnext:v16.35.0-official-apps.1
+
+services:
+  db:
+    image: mariadb:11.8
+    environment:
+      MARIADB_ROOT_PASSWORD: ${LAB_DB_ROOT_PASSWORD}
+      MARIADB_ROOT_HOST: "%"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - db-data:/var/lib/mysql
+    networks:
+      - lab
+
+  redis-cache:
+    image: redis:8.6-alpine
+    command: redis-server --save ""
+    volumes:
+      - redis-cache-data:/data
+    networks:
+      - lab
+
+  redis-queue:
+    image: redis:8.6-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-queue-data:/data
+    networks:
+      - lab
+
+  # Writes `common_site_config.json` and `sites/apps.txt` once, then exits. Copied from the
+  # main stack's own configurator so the two stacks configure themselves the same way; the
+  # only difference is that `db` and the two redis hosts are this project's service names.
+  configurator:
+    image: *frappe-image
+    entrypoint: bash -c
+    command:
+      - >
+        ls -1 apps > sites/apps.txt;
+        bench set-config -g db_host db;
+        bench set-config -gp db_port 3306;
+        bench set-config -g redis_cache "redis://redis-cache:6379";
+        bench set-config -g redis_queue "redis://redis-queue:6379";
+        bench set-config -g redis_socketio "redis://redis-queue:6379";
+        bench set-config -gp socketio_port 9000
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - *logistics-app
+      - *logistics-pth
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
+    networks:
+      - lab
+
+  backend:
+    image: *frappe-image
+    command: bench --site sp_logistics_lab serve --noreload --port 8000
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - *logistics-app
+      - *logistics-pth
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
+    networks:
+      - lab
+
+  websocket:
+    image: *frappe-image
+    command: node /home/frappe/frappe-bench/apps/frappe/socketio.js
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - *logistics-app
+      - *logistics-pth
+    depends_on:
+      redis-queue:
+        condition: service_started
+    networks:
+      - lab
+
+  scheduler:
+    image: *frappe-image
+    command: bench schedule
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - *logistics-app
+      - *logistics-pth
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - lab
+
+  queue-short:
+    image: *frappe-image
+    command: bench worker --queue short,default
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - *logistics-app
+      - *logistics-pth
+    depends_on:
+      redis-queue:
+        condition: service_started
+    networks:
+      - lab
+
+  queue-long:
+    image: *frappe-image
+    command: bench worker --queue long,default
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - *logistics-app
+      - *logistics-pth
+    depends_on:
+      redis-queue:
+        condition: service_started
+    networks:
+      - lab
+
+  frontend:
+    image: *frappe-image
+    command: nginx-entrypoint.sh
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: sp_logistics_lab
+      NGINX_LISTEN_PORT: "8080"
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: 50m
+    ports:
+      - "127.0.0.1:8095:8080"
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - *logistics-app
+      - *logistics-pth
+      - *logistics-assets
+    depends_on:
+      - backend
+      - websocket
+    networks:
+      - lab
+      - host-access
+
+networks:
+  lab:
+    name: sp_logistics_lab_network
+    internal: true
+  host-access:
+    name: sp_logistics_lab_host_access
+
+volumes:
+  db-data:
+    name: sp_logistics_lab_db
+  redis-cache-data:
+    name: sp_logistics_lab_redis_cache
+  redis-queue-data:
+    name: sp_logistics_lab_redis_queue
+  sites:
+    name: sp_logistics_lab_sites
+  logs:
+    name: sp_logistics_lab_logs

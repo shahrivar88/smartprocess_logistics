@@ -1,4 +1,4 @@
-"""The values written once, at install time.
+"""The values written once, at install time — and one that follows the code instead.
 
 Delimiters are stored as literal text. `\\r`, `\\n` and `\\t` are stored as the two characters
 backslash plus letter and are interpreted when a file is read, because a literal newline or
@@ -15,15 +15,26 @@ Two independent guards keep this idempotent, and they answer two different quest
    when an administrator configured the tables on a half-installed site. Without it, the retry
    would append a second copy of every default.
 
-`Logistics Settings.installed_on` is also declared `set_only_once`, so the framework refuses a
-later change to it even if this module were rewritten to try. The two layers are deliberate:
-the early return says what this module intends, and the field flag is what the database
-enforces.
+`sync_normalization_version` is deliberately outside both guards and outside `seed_settings`.
+It records a fact about the **code** rather than about this site's first day, so a value written
+once at install goes stale by design; see its docstring for why that was the mismatch worth
+closing.
+
+`Logistics Settings.installed_on` used to be declared `set_only_once` as a second layer, on the
+theory that the framework would refuse any later change. That was wrong, and it stopped the
+installation three times. `set_only_once` is honoured only when the document is **inserted**
+(`Document.validate_set_only_once` returns immediately unless `_doc_before_save` exists), and
+`installer.init_singles` inserts the `Logistics Settings` row before `after_install` ever runs.
+So the first write this module made was already an *update*, and the framework refused it with
+`CannotChangeConstantError`. The flag belongs on a value chosen at creation time; this value is
+chosen after creation, which is exactly what the early return above is for. It is now the only
+guard, and it is the one that was doing the work all along.
 """
 
 import frappe
 
 from smartprocess_logistics.core.defaults import DEFAULT_DELIMITERS, DEFAULT_ITEM_MARKERS
+from smartprocess_logistics.core.normalization import NORMALIZATION_VERSION
 
 SETTINGS_DOCTYPE = "Logistics Settings"
 
@@ -33,6 +44,34 @@ def is_installed(settings=None):
 	settings = settings if settings is not None else frappe.get_single(SETTINGS_DOCTYPE)
 
 	return bool(settings.installed_on)
+
+
+def sync_normalization_version():
+	"""Record the rule set the app normalizes with, so the screen agrees with the code.
+
+	This is the one value in this module that is **not** written once. It follows
+	`core.normalization.NORMALIZATION_VERSION`, the single source of truth for the rules in
+	force, and it is the only place that writes the field. Written only at install it drifted:
+	the site was installed while rule set 1 was current, the code then moved to 2, and the field
+	went on describing rules the app no longer applies.
+
+	It says nothing about the serials already stored. Which rule set produced each of those is a
+	different fact, recorded on the serial itself as `Logistics Serial.normalization_version`
+	when it was created, and never rewritten here. Rewriting this value therefore cannot change
+	an identity, a stored copy or a report row; it only stops the screen from contradicting the
+	code.
+
+	Returns whether it wrote, so a caller can log the transition. Idempotent.
+	"""
+	settings = frappe.get_single(SETTINGS_DOCTYPE)
+
+	if int(settings.get("normalization_version") or 0) == int(NORMALIZATION_VERSION):
+		return False
+
+	settings.normalization_version = int(NORMALIZATION_VERSION)
+	settings.save()
+
+	return True
 
 
 def seed_settings():

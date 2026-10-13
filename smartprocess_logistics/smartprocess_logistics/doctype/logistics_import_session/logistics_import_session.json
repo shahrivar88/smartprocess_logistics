@@ -7,28 +7,157 @@
  "doctype": "DocType",
  "document_type": "System",
  "engine": "InnoDB",
- "field_order": ["session_section", "token", "session_column", "status", "owner_section", "company", "owner_column", "sales_invoice", "content_section", "row_count", "content_column", "payload_hash", "payload", "timing_section", "expires_at", "timing_column", "claimed_at", "applied_at", "result_section", "result_summary"],
+ "field_order": [
+  "session_section",
+  "token",
+  "session_column",
+  "status",
+  "owner_section",
+  "company",
+  "owner_column",
+  "sales_invoice",
+  "content_section",
+  "row_count",
+  "content_column",
+  "payload_hash",
+  "payload",
+  "timing_section",
+  "expires_at",
+  "timing_column",
+  "claimed_at",
+  "applied_at",
+  "result_section",
+  "result_summary"
+ ],
  "fields": [
-  {"fieldname":"session_section","fieldtype":"Section Break","label":"نشست"},
-  {"description":"شناسهٔ تصادفی و یکتای پیش‌نمایش که تنها چیزی است که به مرورگر برگردانده می‌شود. محتوای پیش‌نمایش سمت سرور می‌ماند تا کلاینت نتواند آن را تغییر دهد. نام سند از نوع hash است و به بیرون داده نمی‌شود.","fieldname":"token","fieldtype":"Data","hidden":1,"label":"توکن","reqd":1,"search_index":1,"unique":1},
-  {"fieldname":"session_column","fieldtype":"Column Break"},
-  {"default":"Prepared","description":"Prepared یعنی پیش‌نمایش آمادهٔ تأیید است. Claimed و Applied و Failed و Expired وضعیت‌های بعدی‌اند. گذار از Prepared فقط یک‌بار ممکن است و در همان تراکنش اعمال انجام می‌شود؛ پس اگر اعمال شکست بخورد، وضعیت خودکار به Prepared برمی‌گردد.","fieldname":"status","fieldtype":"Select","in_standard_filter":1,"label":"وضعیت","options":"Prepared\nClaimed\nApplied\nFailed\nExpired","read_only":1},
-  {"fieldname":"owner_section","fieldtype":"Section Break","label":"مالکیت"},
-  {"description":"شرکت فاکتور. همراه با قواعد استاندارد User Permission فریمورک، دامنهٔ دسترسی را محدود می‌کند.","fieldname":"company","fieldtype":"Link","label":"شرکت","options":"Company","reqd":1,"read_only":1},
-  {"fieldname":"owner_column","fieldtype":"Column Break"},
-  {"description":"فاکتوری که پیش‌نمایش برای آن ساخته شده است. تأیید فقط روی همین فاکتور اعمال می‌شود.","fieldname":"sales_invoice","fieldtype":"Link","label":"فاکتور فروش","options":"Sales Invoice","reqd":1,"read_only":1},
-  {"fieldname":"content_section","fieldtype":"Section Break","label":"محتوا"},
-  {"fieldname":"row_count","fieldtype":"Int","label":"تعداد ردیف","non_negative":1,"read_only":1},
-  {"fieldname":"content_column","fieldtype":"Column Break"},
-  {"description":"هش محتوای پیش‌نمایش. اگر محتوای ذخیره‌شده با این هش نخواند، تأیید رد می‌شود.","fieldname":"payload_hash","fieldtype":"Data","label":"هش محتوا","length":64,"read_only":1},
-  {"description":"محتوا ریز‌به‌ریز پیش‌نمایش، به‌صورت JSON. این فیلد هرگز به کاربر نشان داده نمی‌شود و از مسیر API عادی خوانده یا نوشته نمی‌شود.","fieldname":"payload","fieldtype":"Code","hidden":1,"label":"محتوا","read_only":1},
-  {"fieldname":"timing_section","fieldtype":"Section Break","label":"زمان‌بندی"},
-  {"description":"پس از این زمان، تأیید همان پیش‌نمایش پذیرفته نمی‌شود.","fieldname":"expires_at","fieldtype":"Datetime","label":"انقضا","read_only":1},
-  {"fieldname":"timing_column","fieldtype":"Column Break"},
-  {"fieldname":"claimed_at","fieldtype":"Datetime","label":"زمان claim","read_only":1},
-  {"fieldname":"applied_at","fieldtype":"Datetime","label":"زمان اعمال","read_only":1},
-  {"fieldname":"result_section","fieldtype":"Section Break","label":"نتیجه"},
-  {"description":"خلاصهٔ فارسی نتیجهٔ اعمال یا دلیل شکست، برای پیگیری توسط پشتیبانی.","fieldname":"result_summary","fieldtype":"Small Text","label":"خلاصهٔ نتیجه","read_only":1}
+  {
+   "fieldname": "session_section",
+   "fieldtype": "Section Break",
+   "label": "نشست"
+  },
+  {
+   "description": "شناسهٔ تصادفی و یکتای پیش‌نمایش که تنها چیزی است که به مرورگر برگردانده می‌شود. محتوای پیش‌نمایش سمت سرور می‌ماند تا کلاینت نتواند آن را تغییر دهد. نام سند از نوع hash است و به بیرون داده نمی‌شود. این فیلد پنهان و فقط‌خواندنی می‌ماند: توکن یک قابلیت زنده است و نباید در فرم دیده شود. الزامی‌بودنش در متادیتا نیست چون کدی که نشست را می‌سازد آن را با secrets.token_urlsafe تولید می‌کند، و یکتایی‌اش هم با قید unique روی همین فیلد تضمین می‌شود.",
+   "fieldname": "token",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "توکن",
+   "read_only": 1,
+   "search_index": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "session_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Prepared",
+   "description": "Prepared یعنی پیش‌نمایش آمادهٔ تأیید است. Claimed و Applied و Failed و Expired وضعیت‌های بعدی‌اند. گذار از Prepared فقط یک‌بار ممکن است و در همان تراکنش اعمال انجام می‌شود؛ پس اگر اعمال شکست بخورد، وضعیت خودکار به Prepared برمی‌گردد.",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "وضعیت",
+   "options": "Prepared\nClaimed\nApplied\nFailed\nExpired",
+   "read_only": 1
+  },
+  {
+   "fieldname": "owner_section",
+   "fieldtype": "Section Break",
+   "label": "مالکیت"
+  },
+  {
+   "description": "شرکت فاکتور. همراه با قواعد استاندارد User Permission فریمورک، دامنهٔ دسترسی را محدود می‌کند.",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "شرکت",
+   "options": "Company",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "owner_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "فاکتوری که پیش‌نمایش برای آن ساخته شده است. تأیید فقط روی همین فاکتور اعمال می‌شود.",
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "label": "فاکتور فروش",
+   "options": "Sales Invoice",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "content_section",
+   "fieldtype": "Section Break",
+   "label": "محتوا"
+  },
+  {
+   "fieldname": "row_count",
+   "fieldtype": "Int",
+   "label": "تعداد ردیف",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "content_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "هش محتوای پیش‌نمایش. اگر محتوای ذخیره‌شده با این هش نخواند، تأیید رد می‌شود.",
+   "fieldname": "payload_hash",
+   "fieldtype": "Data",
+   "label": "هش محتوا",
+   "length": 64,
+   "read_only": 1
+  },
+  {
+   "description": "محتوا ریز‌به‌ریز پیش‌نمایش، به‌صورت JSON. این فیلد هرگز به کاربر نشان داده نمی‌شود و از مسیر API عادی خوانده یا نوشته نمی‌شود.",
+   "fieldname": "payload",
+   "fieldtype": "Code",
+   "hidden": 1,
+   "label": "محتوا",
+   "read_only": 1
+  },
+  {
+   "fieldname": "timing_section",
+   "fieldtype": "Section Break",
+   "label": "زمان‌بندی"
+  },
+  {
+   "description": "پس از این زمان، تأیید همان پیش‌نمایش پذیرفته نمی‌شود.",
+   "fieldname": "expires_at",
+   "fieldtype": "Datetime",
+   "label": "انقضا",
+   "read_only": 1
+  },
+  {
+   "fieldname": "timing_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "claimed_at",
+   "fieldtype": "Datetime",
+   "label": "زمان claim",
+   "read_only": 1
+  },
+  {
+   "fieldname": "applied_at",
+   "fieldtype": "Datetime",
+   "label": "زمان اعمال",
+   "read_only": 1
+  },
+  {
+   "fieldname": "result_section",
+   "fieldtype": "Section Break",
+   "label": "نتیجه"
+  },
+  {
+   "description": "خلاصهٔ فارسی نتیجهٔ اعمال یا دلیل شکست، برای پیگیری توسط پشتیبانی.",
+   "fieldname": "result_summary",
+   "fieldtype": "Small Text",
+   "label": "خلاصهٔ نتیجه",
+   "read_only": 1
+  }
  ],
  "is_submittable": 0,
  "links": [],
@@ -38,11 +167,27 @@
  "name": "Logistics Import Session",
  "naming_rule": "Random",
  "owner": "Administrator",
- "permissions": [],
+ "permissions": [
+  {
+   "create": 1,
+   "role": "Logistics Serial Editor"
+  },
+  {
+   "create": 1,
+   "role": "Logistics Serial Manager"
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "System Manager"
+  }
+ ],
  "quick_entry": 0,
  "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 0
+ "track_changes": 0,
+ "description": "هر پیش‌نمایشی که درج از فایل را می‌پذیرد باید پیش از نوشتن، صریحاً توسط کاربر تأیید شود؛ راه دیگری برای درج از فایل وجود ندارد و تنظیمی برای خاموش‌کردن این تأیید نیست."
 }

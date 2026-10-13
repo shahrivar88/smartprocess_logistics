@@ -29,7 +29,12 @@ from smartprocess_logistics.core.session import (
 	claim,
 	expire,
 	fail,
+	finished_at,
 	is_expirable,
+	is_purgeable,
+	RETENTION_DAYS,
+	select_expirable,
+	select_purgeable,
 )
 from smartprocess_logistics.tests.base import UnitTestCase
 
@@ -129,6 +134,16 @@ class TestClaim(UnitTestCase):
 	def test_a_session_with_no_expiry_never_expires(self):
 		self.assertFalse(session(expires_at=None).is_expired(LATER))
 		self.assertEqual(claim_it(session(expires_at=None)).status, CLAIMED)
+
+	def test_a_string_now_is_not_a_valid_clock(self):
+		"""The contract is `datetime`, and this is the check that pins it.
+
+		The API passed `frappe.utils.now()` — a string — where the lifecycle expected a
+		`datetime`, so every confirmation died on `str >= datetime` before it wrote anything.
+		A hundred lines below, the same file already built `expires_at` with `now_datetime()`.
+		"""
+		with self.assertRaises(TypeError):
+			session(expires_at=NOW).is_expired("2026-01-01 00:00:00")
 
 	def test_an_already_claimed_session_is_refused(self):
 		# This design never stores a claimed row, so finding one means somebody else wrote it.
@@ -232,3 +247,82 @@ class TestExpiry(UnitTestCase):
 
 	def test_a_missing_session_is_not_expirable(self):
 		self.assertFalse(is_expirable(None, LATER))
+
+
+class TestCleanup(UnitTestCase):
+	"""Which sessions a cleanup job may remove, and which it must leave.
+
+	Two steps, and they are different questions. A preview nobody confirmed is **expired**: its
+	row stays, because the summary a reader sees should say "expired" rather than "prepared for
+	ever". A session that finished is **removed**, but not at once: the row is the only trace of
+	what an import applied, and it carries the payload — every serial the preview accepted — so it
+	is kept for `RETENTION_DAYS` and then taken in bounded batches.
+	"""
+
+	def test_a_prepared_session_is_expired_before_it_is_removable(self):
+		stale = session(expires_at=NOW)
+
+		self.assertTrue(is_expirable(stale, LATER))
+		self.assertFalse(is_purgeable(stale, LATER))
+		self.assertIsNone(finished_at(stale))
+
+	def test_an_applied_session_older_than_the_retention_is_removable(self):
+		applied = apply(claim_it(session()), now=NOW, summary="1 سریال ثبت شد.")
+		old = NOW + timedelta(days=RETENTION_DAYS + 1)
+
+		self.assertTrue(is_purgeable(applied, old))
+		self.assertEqual(finished_at(applied), NOW)
+
+	def test_an_applied_session_inside_the_retention_is_kept(self):
+		applied = apply(claim_it(session()), now=NOW)
+
+		self.assertFalse(is_purgeable(applied, NOW + timedelta(days=RETENTION_DAYS - 1)))
+
+	def test_a_failed_session_is_removable_when_its_expiry_is_old(self):
+		# A failure that was never applied is dated by the expiry that ended it.
+		failed = session(status=FAILED, expires_at=NOW)
+
+		self.assertTrue(is_purgeable(failed, NOW + timedelta(days=RETENTION_DAYS + 1)))
+
+	def test_a_claimed_session_is_expirable_but_never_removable(self):
+		# A claim that was abandoned — the process died between the claim and the write — is
+		# expired by the job like any other session past its time, and the claim itself refuses an
+		# expired one either way. It is never *removed*, because the row is the only record that a
+		# write may have been attempted, and removing it would erase that.
+		# It is built directly because the claim refuses an expired session, which is the state
+		# this row is in only after a claim succeeded and time passed.
+		claimed = session(status=CLAIMED, expires_at=NOW)
+
+		self.assertTrue(is_expirable(claimed, NOW + timedelta(days=365)))
+		self.assertFalse(is_purgeable(claimed, NOW + timedelta(days=365)))
+
+	def test_the_batch_takes_the_oldest_first(self):
+		rows = [
+			apply(claim_it(session(name="LIS-3")), now=NOW + timedelta(days=2)),
+			apply(claim_it(session(name="LIS-1")), now=NOW),
+			apply(claim_it(session(name="LIS-2")), now=NOW + timedelta(days=1)),
+		]
+		long_after = NOW + timedelta(days=RETENTION_DAYS + 10)
+
+		self.assertEqual(select_purgeable(rows, long_after, limit=2), ("LIS-1", "LIS-2"))
+		self.assertEqual(select_purgeable(rows, long_after), ("LIS-1", "LIS-2", "LIS-3"))
+
+	def test_the_batch_is_bounded(self):
+		rows = [apply(claim_it(session(name=f"LIS-{index}")), now=NOW) for index in range(10)]
+		long_after = NOW + timedelta(days=RETENTION_DAYS + 1)
+
+		self.assertEqual(len(select_purgeable(rows, long_after, limit=3)), 3)
+
+	def test_the_expire_step_is_bounded_and_ordered_by_expiry(self):
+		rows = [
+			session(name="LIS-late", expires_at=NOW + timedelta(minutes=5)),
+			session(name="LIS-early", expires_at=NOW - timedelta(minutes=5)),
+			session(name="LIS-fresh", expires_at=LATER + timedelta(hours=2)),
+		]
+
+		self.assertEqual(select_expirable(rows, LATER), ("LIS-early", "LIS-late"))
+		self.assertEqual(select_expirable(rows, LATER, limit=1), ("LIS-early",))
+
+	def test_an_empty_table_is_an_empty_batch(self):
+		self.assertEqual(select_purgeable([], LATER), ())
+		self.assertEqual(select_expirable([], LATER), ())

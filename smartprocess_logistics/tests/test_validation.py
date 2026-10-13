@@ -160,6 +160,98 @@ class TestDuplicates(UnitTestCase):
 		self.assertEqual(len(result.accepted), 1)
 
 
+class TestReplacedRows(UnitTestCase):
+	"""A row whose whole set is written again is judged on the set being written.
+
+	`set_row_serials` names one row and replaces it: the assignments it already holds are
+	removed before the new ones are inserted. Counting them as still present made a correction
+	impossible — re-sending a serial the row already had was reported as a serial already on the
+	invoice, and a shorter list was reported as an excess instead of the shortage it is.
+	"""
+
+	EXISTING = (
+		ExistingAssignment(row_key="row-1", normalized_serial="a1"),
+		ExistingAssignment(row_key="row-1", normalized_serial="a2"),
+		ExistingAssignment(row_key="row-1", normalized_serial="a3"),
+	)
+
+	def test_a_replaced_row_may_keep_two_serials_and_add_one(self):
+		result = plan(
+			[ROW_1],
+			[("row-1", "A1"), ("row-1", "A2"), ("row-1", "A9")],
+			existing=self.EXISTING,
+			replaced_rows=("row-1",),
+		)
+
+		self.assertTrue(result.is_valid)
+		self.assertEqual(result.issue_codes(), ())
+		self.assertEqual(result.coverages[0].registered, 3)
+		self.assertEqual(result.coverages[0].shortage, 0)
+
+	def test_a_replaced_row_may_be_shortened(self):
+		result = plan(
+			[ROW_1], [("row-1", "A1"), ("row-1", "A2")], existing=self.EXISTING, replaced_rows=("row-1",)
+		)
+
+		self.assertTrue(result.is_valid)
+		self.assertEqual(result.coverages[0].registered, 2)
+		self.assertEqual(result.coverages[0].shortage, 1)
+
+	def test_a_replaced_row_may_be_emptied(self):
+		result = plan([ROW_1], [], existing=self.EXISTING, replaced_rows=("row-1",))
+
+		self.assertTrue(result.is_valid)
+		self.assertEqual(result.coverages[0].registered, 0)
+		self.assertEqual(result.coverages[0].shortage, 3)
+
+	def test_a_replaced_row_may_not_exceed_its_quantity(self):
+		result = plan(
+			[ROW_1],
+			[("row-1", "A1"), ("row-1", "A2"), ("row-1", "A3"), ("row-1", "A4")],
+			existing=self.EXISTING,
+			replaced_rows=("row-1",),
+		)
+
+		self.assertFalse(result.is_valid)
+		self.assertEqual(result.issue_codes(), (CODE_EXCESS_QUANTITY,))
+
+	def test_a_serial_on_a_row_that_is_not_replaced_is_still_refused(self):
+		# The other row keeps its assignment, so the serial is on the invoice either way.
+		result = plan(
+			[ROW_1, ROW_2],
+			[("row-1", "B1")],
+			existing=(ExistingAssignment(row_key="row-2", normalized_serial="b1"),),
+			replaced_rows=("row-1",),
+		)
+
+		self.assertFalse(result.is_valid)
+		self.assertEqual(result.issue_codes(), (CODE_ALREADY_REGISTERED,))
+
+	def test_an_import_names_no_replaced_rows_and_still_refuses_a_repeat(self):
+		result = plan([ROW_1], [("row-1", "A1")], existing=self.EXISTING)
+
+		self.assertFalse(result.is_valid)
+		self.assertEqual(result.issue_codes(), (CODE_ALREADY_REGISTERED,))
+
+	def test_one_serial_stored_on_two_rows_is_refused_in_either_order(self):
+		# The database keeps one serial per invoice, but a direct write can leave it on two
+		# rows. Filtering the already-registered set through a serial-to-row map made the answer
+		# depend on which row the map recorded last, so this pins both orders.
+		for first, second in (("row-1", "row-2"), ("row-2", "row-1")):
+			with self.subTest(order=(first, second)):
+				existing = (
+					ExistingAssignment(row_key=first, normalized_serial="x1"),
+					ExistingAssignment(row_key=second, normalized_serial="x1"),
+				)
+
+				result = plan(
+					[ROW_1, ROW_2], [("row-1", "X1")], existing=existing, replaced_rows=("row-1",)
+				)
+
+				self.assertFalse(result.is_valid)
+				self.assertEqual(result.issue_codes(), (CODE_ALREADY_REGISTERED,))
+
+
 class TestPerSerialFailures(UnitTestCase):
 	def test_an_unknown_row_is_refused(self):
 		result = plan([ROW_1], [("row-9", "A1")])

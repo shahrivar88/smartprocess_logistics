@@ -5,6 +5,15 @@ tab cannot be typed there usefully, so `\\r`, `\\n` and `\\t` are stored as the 
 backslash plus letter and interpreted here. `\\\\` is a literal backslash, which is what makes
 the encoding reversible.
 
+A space is a delimiter this app supports, and it is written `\\s`. It could be stored as the
+single character `" "`, and this module has always accepted that — `validate_delimiter(" ")`
+returns a space and still does, so a delimiter already configured that way keeps working. What
+a bare space cannot do is live in a **required** field: Frappe's mandatory validation asks
+`strip_html(value).strip()` for truth (`model/base_document.py`), so a whitespace-only value is
+reported as missing and the save is refused. That is what stopped the first installation, which
+shipped `("Space", " ")` as a default. `\\s` is not blank, so it survives that check and decodes
+to exactly one ASCII space here.
+
 Splitting is deterministic and does not depend on the order the delimiters happen to be
 configured in. When several delimiters match at the same position, the longest one wins, which
 is the rule that resolves the `,` versus `,,` overlap. Delimiters of equal length are ordered
@@ -17,7 +26,9 @@ MAX_DELIMITER_CHARS = 8
 MAX_TEXT_CHARS = 1_000_000
 MAX_TOKENS = 50_000
 
-ESCAPES = (("\\\\", "\\"), ("\\r", "\r"), ("\\n", "\n"), ("\\t", "\t"))
+# Each escape's second character is distinct, so the order here does not affect the result: a
+# position can match at most one of them.
+ESCAPES = (("\\\\", "\\"), ("\\r", "\r"), ("\\n", "\n"), ("\\t", "\t"), ("\\s", " "))
 
 # Characters a delimiter may be made of. Tab, newline and carriage return are allowed; every
 # other control character and every letter or digit is not, because a separator that is part
@@ -172,12 +183,16 @@ def find_duplicates(delimiters):
 	return tuple(duplicates)
 
 
-def split_tokens(text, delimiters):
+def split_tokens(text, delimiters, max_tokens=MAX_TOKENS):
 	"""Split text on every delimiter, longest match first.
 
 	Consecutive delimiters produce an empty token, which is deliberately kept: an empty token
 	is almost always a mistake in the file, and silently dropping it would hide the mistake.
 	Callers filter or report it.
+
+	`max_tokens` is the caller's ceiling, defaulting to this module's own. It exists because the
+	operator's row limit on `Logistics Settings` is documented as bounding what a text file may
+	hold, and a token is at most one row's worth of serial.
 	"""
 	if not isinstance(text, str):
 		raise DelimiterError(CODE_TEXT_NOT_TEXT, "متن ورودی باید متن باشد.")
@@ -205,9 +220,32 @@ def split_tokens(text, delimiters):
 			buffer.append(text[index])
 			index += 1
 
-		if len(tokens) > MAX_TOKENS:
-			raise DelimiterError(CODE_TOO_MANY_TOKENS, f"تعداد توکن‌ها بیش از {MAX_TOKENS} است.")
+		if len(tokens) > max_tokens:
+			raise DelimiterError(CODE_TOO_MANY_TOKENS, f"تعداد توکن‌ها بیش از {max_tokens} است.")
 
 	tokens.append("".join(buffer))
 
 	return tokens
+
+
+# Separators an operator types between serials in a box, on top of the configured delimiters.
+# They are written in the same two-character stored form the settings table uses — `\\n`, `\\t` —
+# because that is the form `DelimiterSet.of` interprets.
+TYPED_SEPARATORS = (",", ";", "،", "\\r\\n", "\\n", "\\t")
+
+
+def split_typed_list(text, delimiters, max_tokens=MAX_TOKENS):
+	"""Split serials somebody typed into a box, rather than serials read from a file.
+
+	The two are deliberately not the same rule. A list typed by hand is separated with a comma or
+	a semicolon by habit, and the shipped configuration makes neither a delimiter — so a file whose
+	line is `A,B` holds one serial named `A,B`, and somebody who types the same text means two.
+	Blank tokens are dropped here and reported for a file: separators typed twice are a keystroke,
+	while an empty line in a file is usually a mistake worth naming.
+
+	This is the whole difference between the two paths, and it is stated once, in `core`, so a
+	test can reach it.
+	"""
+	delimiter_set = DelimiterSet.of(tuple(delimiters) + TYPED_SEPARATORS)
+
+	return tuple(token.strip() for token in split_tokens(text, delimiter_set, max_tokens=max_tokens) if token.strip())

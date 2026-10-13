@@ -4,36 +4,198 @@
  "doctype": "DocType",
  "document_type": "Setup",
  "engine": "InnoDB",
- "field_order": ["general_tab", "status_section", "enable_serial_registration", "status_column", "installed_on", "serial_section", "serial_max_length", "serial_column", "normalization_version", "import_tab", "limit_section", "max_import_rows", "max_import_file_kb", "limit_column", "max_import_sheets", "preview_ttl_minutes", "policy_section", "require_preview_confirmation", "policy_column", "allow_over_quantity", "parsing_section", "delimiters", "item_markers", "report_tab", "report_section", "default_page_length", "report_column", "max_page_length"],
+ "field_order": [
+  "general_tab",
+  "status_section",
+  "enable_serial_registration",
+  "status_column",
+  "installed_on",
+  "serial_section",
+  "serial_max_length",
+  "serial_column",
+  "normalization_version",
+  "import_tab",
+  "limit_section",
+  "max_import_rows",
+  "max_import_file_kb",
+  "limit_column",
+  "max_import_sheets",
+  "preview_ttl_minutes",
+  "policy_section",
+  "policy_column",
+  "allow_over_quantity",
+  "parsing_section",
+  "delimiters",
+  "item_markers",
+  "report_tab",
+  "report_section",
+  "default_page_length",
+  "report_column",
+  "max_page_length"
+ ],
  "fields": [
-  {"fieldname":"general_tab","fieldtype":"Tab Break","label":"عمومی"},
-  {"fieldname":"status_section","fieldtype":"Section Break","label":"وضعیت ماژول"},
-  {"default":"1","description":"کلید اصلی ماژول. خاموش‌کردن آن فقط دکمهٔ ثبت سریال را از فرم فاکتور برمی‌دارد؛ هیچ سریال، ارجاع یا گزارشی حذف یا تغییر داده نمی‌شود و اسناد مالی هم دست‌نخورده می‌مانند.","fieldname":"enable_serial_registration","fieldtype":"Check","label":"فعال‌سازی ثبت سریال"},
-  {"fieldname":"status_column","fieldtype":"Column Break"},
-  {"description":"زمان دقیق نصب ماژول. در همان نصب و فقط یک‌بار نوشته می‌شود و در migrate یا ارتقا تغییر نمی‌کند. مبنای واجدشرایط‌بودن فاکتور در گزارش «کسری سریال» است: فقط فاکتورهایی که Sales Invoice.creation آن‌ها بزرگ‌تر یا مساوی این مقدار باشد در گزارش می‌آیند. فاکتورهای قدیمی‌تر حتی اگر بعداً ثبت شوند کنار گذاشته می‌شوند، ولی ثبت دستی سریال روی آن‌ها همچنان ممکن است.","fieldname":"installed_on","fieldtype":"Datetime","label":"تاریخ نصب ماژول","read_only":1,"set_only_once":1},
-  {"fieldname":"serial_section","fieldtype":"Section Break","label":"سریال"},
-  {"default":"60","description":"سقف تعداد نویسهٔ شماره سریال در ورود دستی و در درج از فایل. ستون دیتابیس عمداً پهن‌تر و برابر پیش‌فرض استاندارد (۱۴۰) نگه داشته می‌شود تا این تنظیم بدون تغییر اسکیما قابل تعدیل باشد.","fieldname":"serial_max_length","fieldtype":"Int","label":"حداکثر طول شماره سریال","non_negative":1},
-  {"fieldname":"serial_column","fieldtype":"Column Break"},
-  {"default":"1","description":"نسخهٔ سیاست نرمال‌سازی که شمارهٔ سریال‌های ذخیره‌شده با آن ساخته شده‌اند. با تغییر قواعد نرمال‌سازی این عدد بالا می‌رود و یک patch دوره‌ای، سریال‌های نسخهٔ قدیمی را بازنویسی می‌کند. اگر در این بازنویسی برخوردی پیدا شود، patch متوقف می‌شود و فهرست برخوردها را گزارش می‌دهد؛ هیچ سریالی بی‌صدا ادغام نمی‌شود.","fieldname":"normalization_version","fieldtype":"Int","label":"نسخهٔ سیاست نرمال‌سازی","non_negative":1,"read_only":1},
-  {"fieldname":"import_tab","fieldtype":"Tab Break","label":"درج از فایل"},
-  {"fieldname":"limit_section","fieldtype":"Section Break","label":"محدودیت‌های فایل"},
-  {"default":"5000","description":"سقف تعداد ردیف خوانده‌شده از فایل. فایل بزرگ‌تر از این مقدار پیش از پردازش رد می‌شود.","fieldname":"max_import_rows","fieldtype":"Int","label":"حداکثر تعداد ردیف","non_negative":1},
-  {"default":"512","description":"سقف حجم فایل ورودی بر حسب کیلوبایت. این سقف مستقل از تنظیم استاندارد System Settings.max_file_size است و پیش از بازکردن فایل اعمال می‌شود.","fieldname":"max_import_file_kb","fieldtype":"Int","label":"حداکثر حجم فایل (کیلوبایت)","non_negative":1},
-  {"fieldname":"limit_column","fieldtype":"Column Break"},
-  {"default":"20","description":"سقف تعداد شیت‌های یک فایل XLSX. فایل با شیت بیشتر پیش از خواندن محتوا رد می‌شود.","fieldname":"max_import_sheets","fieldtype":"Int","label":"حداکثر تعداد شیت","non_negative":1},
-  {"default":"10","description":"مدت اعتبار پیش‌نمایش یک درج فایلی. پس از این مدت، تأیید همان پیش‌نمایش پذیرفته نمی‌شود و کاربر باید دوباره فایل را بارگذاری کند.","fieldname":"preview_ttl_minutes","fieldtype":"Int","label":"اعتبار پیش‌نمایش (دقیقه)","non_negative":1},
-  {"fieldname":"policy_section","fieldtype":"Section Break","label":"سیاست درج"},
-  {"default":"1","description":"وقتی روشن است، درج از فایل فقط پس از نمایش پیش‌نمایش و تأیید صریح کاربر ذخیره می‌شود. نمایش پیش‌نمایش هیچ چیزی را در دیتابیس نمی‌نویسد.","fieldname":"require_preview_confirmation","fieldtype":"Check","label":"الزام تأیید پیش‌نمایش"},
-  {"fieldname":"policy_column","fieldtype":"Column Break"},
-  {"default":"0","description":"وقتی خاموش است، ثبت سریالِ بیشتر از تعداد ردیف فاکتور رد می‌شود. روشن‌کردن آن فقط جلوی رد شدن را می‌گیرد و هشدار را نگه می‌دارد؛ در این حالت ردیف در گزارش کسری با مازاد منفی نمایش داده می‌شود.","fieldname":"allow_over_quantity","fieldtype":"Check","label":"اجازهٔ ثبت بیش از تعداد فاکتور"},
-  {"fieldname":"parsing_section","fieldtype":"Section Break","label":"جداکننده‌ها و نشانگرها"},
-  {"fieldname":"delimiters","fieldtype":"Table","label":"جداکننده‌های فعال","options":"Logistics Import Delimiter"},
-  {"fieldname":"item_markers","fieldtype":"Table","label":"الگوهای نشانگر کالا","options":"Logistics Item Marker"},
-  {"fieldname":"report_tab","fieldtype":"Tab Break","label":"گزارش"},
-  {"fieldname":"report_section","fieldtype":"Section Break","label":"صفحه‌بندی"},
-  {"default":"50","fieldname":"default_page_length","fieldtype":"Int","label":"تعداد ردیف پیش‌فرض صفحه","non_negative":1},
-  {"fieldname":"report_column","fieldtype":"Column Break"},
-  {"default":"500","description":"سقف سختی که سرور روی تعداد ردیف هر صفحه اعمال می‌کند، مستقل از مقداری که کاربر در گزارش انتخاب می‌کند.","fieldname":"max_page_length","fieldtype":"Int","label":"حداکثر تعداد ردیف صفحه","non_negative":1}
+  {
+   "fieldname": "general_tab",
+   "fieldtype": "Tab Break",
+   "label": "عمومی"
+  },
+  {
+   "fieldname": "status_section",
+   "fieldtype": "Section Break",
+   "label": "وضعیت ماژول"
+  },
+  {
+   "default": "1",
+   "description": "کلید اصلی ماژول. خاموش‌کردن آن فقط دکمهٔ ثبت سریال را از فرم فاکتور برمی‌دارد؛ هیچ سریال، ارجاع یا گزارشی حذف یا تغییر داده نمی‌شود و اسناد مالی هم دست‌نخورده می‌مانند.",
+   "fieldname": "enable_serial_registration",
+   "fieldtype": "Check",
+   "label": "فعال‌سازی ثبت سریال"
+  },
+  {
+   "fieldname": "status_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "زمان دقیق نصب ماژول. هنگام نصب یک‌بار نوشته می‌شود و برنامه پس از آن بازنویسی‌اش نمی‌کند؛ نه نصب دوباره و نه migrate آن را تغییر نمی‌دهد. مبنای واجدشرایط‌بودن فاکتور در گزارش «کسری سریال» است: فقط فاکتورهایی که Sales Invoice.creation آن‌ها بزرگ‌تر یا مساوی این مقدار باشد در گزارش می‌آیند. فاکتورهای قدیمی‌تر حتی اگر بعداً ثبت شوند کنار گذاشته می‌شوند، ولی ثبت دستی سریال روی آن‌ها همچنان ممکن است.",
+   "fieldname": "installed_on",
+   "fieldtype": "Datetime",
+   "label": "تاریخ نصب ماژول",
+   "read_only": 1
+  },
+  {
+   "fieldname": "serial_section",
+   "fieldtype": "Section Break",
+   "label": "سریال"
+  },
+  {
+   "default": "60",
+   "description": "سقف تعداد نویسهٔ شماره سریال در ورود دستی و در درج از فایل. ستون دیتابیس عمداً پهن‌تر و برابر پیش‌فرض استاندارد (۱۴۰) نگه داشته می‌شود تا این تنظیم بدون تغییر اسکیما قابل تعدیل باشد.",
+   "fieldname": "serial_max_length",
+   "fieldtype": "Int",
+   "label": "حداکثر طول شماره سریال",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "serial_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "2",
+   "description": "نسخهٔ قواعد نرمال‌سازی که این نصب با آن کار می‌کند. با هر migrate با کد همگام می‌شود، پس اگر کد جلو رفته باشد این عدد هم جلو می‌رود و صفحهٔ تنظیمات دیگر خلاف کد نمی‌گوید. این عدد دربارهٔ سریال‌های ذخیره‌شده چیزی نمی‌گوید: نسخهٔ هر سریال جداگانه در خودش (Logistics Serial) ثبت شده و این مقدار آن را بازنویسی نمی‌کند، پس تغییر آن هیچ هویتی و هیچ ارجاعی را عوض نمی‌کند. اگر روزی قواعد عوض شود و سریال‌های قدیمی بازنویسی لازم داشته باشند، آن یک patch جداگانه است و به تصمیم جداگانه نیاز دارد.",
+   "fieldname": "normalization_version",
+   "fieldtype": "Int",
+   "label": "نسخهٔ سیاست نرمال‌سازی",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "import_tab",
+   "fieldtype": "Tab Break",
+   "label": "درج از فایل"
+  },
+  {
+   "fieldname": "limit_section",
+   "fieldtype": "Section Break",
+   "label": "محدودیت‌های فایل"
+  },
+  {
+   "default": "5000",
+   "description": "سقف تعداد ردیف خوانده‌شده از فایل. فایل بزرگ‌تر از این مقدار پیش از پردازش رد می‌شود.",
+   "fieldname": "max_import_rows",
+   "fieldtype": "Int",
+   "label": "حداکثر تعداد ردیف",
+   "non_negative": 1
+  },
+  {
+   "default": "512",
+   "description": "سقف حجم فایل ورودی بر حسب کیلوبایت. این سقف مستقل از تنظیم استاندارد System Settings.max_file_size است و پیش از بازکردن فایل اعمال می‌شود.",
+   "fieldname": "max_import_file_kb",
+   "fieldtype": "Int",
+   "label": "حداکثر حجم فایل (کیلوبایت)",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "limit_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "20",
+   "description": "سقف تعداد شیت‌های یک فایل XLSX. فایل با شیت بیشتر پیش از خواندن محتوا رد می‌شود.",
+   "fieldname": "max_import_sheets",
+   "fieldtype": "Int",
+   "label": "حداکثر تعداد شیت",
+   "non_negative": 1
+  },
+  {
+   "default": "10",
+   "description": "مدت اعتبار پیش‌نمایش یک درج فایلی. پس از این مدت، تأیید همان پیش‌نمایش پذیرفته نمی‌شود و کاربر باید دوباره فایل را بارگذاری کند.",
+   "fieldname": "preview_ttl_minutes",
+   "fieldtype": "Int",
+   "label": "اعتبار پیش‌نمایش (دقیقه)",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "policy_section",
+   "fieldtype": "Section Break",
+   "label": "سیاست درج"
+  },
+  {
+   "fieldname": "policy_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "وقتی خاموش است، ثبت سریالِ بیشتر از تعداد ردیف فاکتور رد می‌شود. روشن‌کردن آن فقط جلوی رد شدن را می‌گیرد و هشدار را نگه می‌دارد؛ در این حالت ردیف در گزارش کسری با مازاد منفی نمایش داده می‌شود.",
+   "fieldname": "allow_over_quantity",
+   "fieldtype": "Check",
+   "label": "اجازهٔ ثبت بیش از تعداد فاکتور"
+  },
+  {
+   "fieldname": "parsing_section",
+   "fieldtype": "Section Break",
+   "label": "جداکننده‌ها و نشانگرها"
+  },
+  {
+   "fieldname": "delimiters",
+   "fieldtype": "Table",
+   "label": "جداکننده‌های فعال",
+   "options": "Logistics Import Delimiter"
+  },
+  {
+   "fieldname": "item_markers",
+   "fieldtype": "Table",
+   "label": "الگوهای نشانگر کالا",
+   "options": "Logistics Item Marker"
+  },
+  {
+   "fieldname": "report_tab",
+   "fieldtype": "Tab Break",
+   "label": "گزارش"
+  },
+  {
+   "fieldname": "report_section",
+   "fieldtype": "Section Break",
+   "label": "صفحه‌بندی"
+  },
+  {
+   "default": "50",
+   "fieldname": "default_page_length",
+   "fieldtype": "Int",
+   "label": "تعداد ردیف پیش‌فرض صفحه",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "report_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "500",
+   "description": "سقف سختی که سرور روی تعداد ردیف هر صفحه اعمال می‌کند، مستقل از مقداری که کاربر در گزارش انتخاب می‌کند.",
+   "fieldname": "max_page_length",
+   "fieldtype": "Int",
+   "label": "حداکثر تعداد ردیف صفحه",
+   "non_negative": 1
+  }
  ],
  "issingle": 1,
  "links": [],
@@ -43,10 +205,29 @@
  "name": "Logistics Settings",
  "owner": "Administrator",
  "permissions": [
-  {"read":1,"report":1,"role":"Logistics Serial Viewer"},
-  {"read":1,"report":1,"role":"Logistics Serial Editor"},
-  {"read":1,"report":1,"role":"Logistics Serial Manager","write":1},
-  {"create":1,"read":1,"report":1,"role":"System Manager","write":1}
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Logistics Serial Viewer"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Logistics Serial Editor"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Logistics Serial Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "write": 1
+  }
  ],
  "row_format": "Dynamic",
  "sort_field": "modified",

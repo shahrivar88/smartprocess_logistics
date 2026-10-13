@@ -332,29 +332,51 @@ def run_rewrite(plan, gateway):
 
 	gateway.lock_serials(tuple(sorted({row.item_code for row in rows})))
 
+	# The rows whose whole set is written again, and therefore the rows whose stored assignments
+	# the validator must count out: the ones a caller named as replaced. `set_row_serials` names
+	# one row, an import names none — an import adds to a row that may already hold serials the
+	# file never mentions, and deleting those first discarded registrations nobody asked to
+	# remove. Adding is the import's job; removing is `delete_assignments`, or `set_row_serials`
+	# with a shorter list. Both the validator and the delete loop below read this one value, so
+	# the check and the deletion cannot drift apart.
+	rewrite_rows = tuple(plan.only_rows)
+
 	result = plan_registration(
 		rows=rows,
 		submissions=plan.submissions,
 		existing=existing,
+		replaced_rows=rewrite_rows,
 		delimiters=plan.delimiters,
 		policy=plan.policy,
 		allow_over_quantity=plan.allow_over_quantity,
 	)
 
 	if not result.is_valid:
+		errors = tuple(result.errors)
+
+		# The validator's own codes are the ones a caller can act on — DUPLICATE_IN_INVOICE,
+		# EXCESS_QUANTITY, and so on. Reporting PLAN_PAYLOAD_CHANGED for every one of them told
+		# three different failures apart in the message and identically in the code, which is the
+		# half of the error a client switches on. The first error's code stands for the response;
+		# the message still lists all of them.
 		raise OrchestrationError(
-			CODE_PAYLOAD_CHANGED,
-			"; ".join(issue.message for issue in result.errors),
+			errors[0].code if errors else CODE_PAYLOAD_CHANGED,
+			"; ".join(issue.message for issue in errors),
 		)
 
-	rewrite_rows = plan.only_rows or tuple(sorted({item.row_key for item in result.accepted}))
 	deleted = 0
 
 	for row_key in rewrite_rows:
 		deleted += gateway.delete_row_assignments(plan.invoice_name, row_key)
 
+	# The rule set that produced each identity is carried with it, not looked up. A serial that
+	# is created records the version that normalized *it*, so a later change of rules leaves the
+	# earlier serials described by the version they were actually built with. Reading the current
+	# constant at insert time would relabel every old serial as new on the first import after a
+	# rule change, which is the one thing the field exists to prevent.
 	requests = tuple(
-		(item.item_code, item.serial.normalized, item.serial.original) for item in result.accepted
+		(item.item_code, item.serial.normalized, item.serial.original, item.serial.version)
+		for item in result.accepted
 	)
 	serials = gateway.find_or_create_serials(requests)
 	by_key = serials.get("by_normalized", {})

@@ -1,20 +1,31 @@
 """Installation, migration and uninstall entry points for smartprocess_logistics.
 
-`hooks.py` registers `after_install` and `after_migrate`. `before_uninstall` is implemented
-here, tested, and deliberately **not registered**: see its docstring for what still has to be
-exercised against a real uninstall on a disposable site before it is allowed to run.
+`hooks.py` registers three of these: `after_install`, `after_migrate` and `after_uninstall`. They
+are the app's whole lifecycle surface, and each one is idempotent.
 
-`after_install` and `after_migrate` run the same three steps, and that is not duplication.
-Frappe v16 calls them at different times and one does not imply the other: `installer.install_app`
+`after_install` and `after_migrate` run the same four steps, and that is not duplication. Frappe
+v16 calls them at different times and one does not imply the other: `installer.install_app`
 commits the app into `Installed Applications` *before* it runs `after_install`, and it **never**
 runs `after_migrate`. A failure inside `after_install` therefore leaves a site that reports the
 app as installed with the work half done, and the only thing that ever repairs it is a later
 `after_migrate`. Both entry points call `_ensure_app_state` so that repair is what the next
 migrate does, not a manual cleanup.
 
+There is deliberately **no** `before_uninstall`. An earlier version had one, because the app kept
+a copy of its own records in tables of its own so that they would survive the removal — and
+Frappe's uninstaller removes the table behind every DocType of the app being removed, so that
+copy had to be defended by a hook that wrote and verified it first. That whole mechanism is gone.
+What protects the records now is what protects the rest of an ERPNext site: a **full site backup**,
+and a **portable export of this app's own records** taken before the removal, both of which an
+operator takes on purpose rather than as a side effect of uninstalling. `README.md` states the
+order, and the export is two buttons on `Logistics Settings`.
+
+`after_uninstall` remains, because it is not about data at all: it clears up what the framework's
+own cleanup cannot see.
+
 Every function is safe to run repeatedly: each step checks for what already exists before it
-writes. None of them touches a document this app does not own, and none of them calls
-`ignore_permissions` or `frappe.db.get_all`.
+writes. None of them touches a document this app does not own, none calls `ignore_permissions`,
+and none writes a business document with SQL.
 """
 
 import json
@@ -23,53 +34,93 @@ import os
 import frappe
 from frappe import _
 
+from smartprocess_logistics.core import session as session_rules
 from smartprocess_logistics.setup import constraints, roles, seeds
 
-# Records this app owns that a reader would miss if they disappeared. These decide whether an
-# uninstall has something at stake, and they are the only tables the copy reads; see
-# `before_uninstall`.
-PROTECTED_DOCTYPES = ("Logistics Serial", "Logistics Serial Assignment")
+# The app's icon lives beside `hooks.py`, at `<app>/desktop_icon/<name>.json`. Its document is
+# named after its own label, and the label is Persian, which is exactly why the framework's own
+# cleanup misses it: `delete_desktop_icon_and_sidebar` deletes the icons whose name or
+# `parent_icon` equals the app's **title**, and this app's title is the English
+# `SmartProcess Logistics` while the icon is named `سریال لجستیک`. The hook below reads the name
+# from the shipped file rather than repeating it, so the two cannot drift apart.
+ICON_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desktop_icon")
 
-# The app's Single. Its rows are configuration an administrator typed, not defaults, so the
-# copy carries them even though a later install would seed its own. It holds no secret: a
-# switch, a timestamp, four limits and the parsed delimiter and marker tables.
-COPIED_SINGLES = ("Logistics Settings",)
-
-# `Logistics Import Session` is deliberately **not** copied. A preview session is transient by
-# design — the claim is never persisted and the row expires — so there is nothing in it worth
-# recovering. It also carries the two hidden fields `token` and `payload`, and the token is the
-# nonce a client uses to confirm its own preview. Copying that into a file on a volume every
-# service in the stack can read would widen the exposure of a live capability to preserve
-# nothing, so the table is left out rather than filtered field by field.
-
-# Rows read per query while building the copy. The loop pages until the expected count is
-# reached, so this bounds memory rather than completeness.
-EXPORT_PAGE_SIZE = 500
-
-# How many names to try before giving up on finding a free one for the copy.
-PRESERVATION_ATTEMPTS = 100
-
-
-class PreservationError(Exception):
-	"""The copy could not be written, or could not be shown to be a faithful one.
-
-	Both amount to the same thing for the caller: there is no artifact to restore from, so the
-	uninstall stops.
-	"""
+# Rows read per page while listing icons. A page size rather than "no limit", so that a site with
+# many icons does not turn one cleanup into one enormous read.
+NAMES_PAGE_SIZE = 200
 
 
 def _ensure_app_state():
-	"""The three steps that make an installation correct, in a deliberate order.
+	"""The four steps that make an installation correct, in a deliberate order.
 
-	Roles first, so the DocPerms that name them resolve. Constraints second, because they are
-	the invariant the data must satisfy. Seeds last, because `seed_settings` writes
-	`installed_on`, and that timestamp is this app's own marker that the installation finished.
-	Writing it last means a failure anywhere above leaves it empty and the next attempt repairs
-	the site instead of finding a settings row that claims to be complete.
+	Roles first, so the DocPerms that name them resolve. Constraints second, because they are the
+	invariant the data must satisfy. The normalization version third, because it describes the
+	code rather than this site and must be able to catch up on every migrate. Seeds last, because
+	`seed_settings` writes `installed_on`, and that timestamp is this app's own marker that the
+	installation finished. Writing it last means a failure anywhere above leaves it empty and the
+	next attempt repairs the site instead of finding a settings row that claims to be complete.
+
+	`purge_stale_sessions` is deliberately **not** one of them. It is housekeeping, and an install
+	or a migrate must not be able to fail because a sweep lost a race; the daily job in `hooks.py`
+	is what runs it.
 	"""
 	roles.ensure_roles()
 	constraints.ensure_unique_constraints()
+	seeds.sync_normalization_version()
 	seeds.seed_settings()
+
+
+def _gateway():
+	"""The real gateway, imported here rather than at module level.
+
+	`install.py` is imported by the database-free lifecycle tests, which run it against a stand-in
+	`frappe`; the gateway imports `frappe.permissions` by name and would fail to import there. The
+	sweep takes a gateway as an argument for the same reason a test can reach it at all.
+	"""
+	from smartprocess_logistics.api.gateway import FrappeGateway
+
+	return FrappeGateway()
+
+
+def purge_stale_sessions(gateway=None):
+	"""Expire the previews that expired on their own, and remove the finished ones that are old.
+
+	Run by the daily job in `hooks.py`, and by nothing else: housekeeping must not be able to fail
+	an install or a migrate, so `_ensure_app_state` deliberately does not call it.
+
+	Both steps are bounded by `core.session.PURGE_BATCH` and ordered by `core.session`, so a site
+	that fell behind catches up over several runs instead of emptying the table in one long
+	transaction. The table is read **once** for both steps: the two questions are asked of the
+	same rows, and the rows are the app's own transient ones, kept small by this very job.
+
+	The returned names mean two different things, and the docstring says so because the keys do
+	not: `expired` are the rows the conditional update was aimed at — it reports no count, and a
+	row that a confirmation applied while the sweep was reading is deliberately left alone — while
+	`purged` are the rows this run actually removed. `contended` says a run lost a race and did
+	nothing at all.
+
+	Contention is caught rather than raised. This is housekeeping: two requests and this sweep can
+	touch the same session row, and MariaDB aborts one of them. A run that loses that race does
+	nothing and tries again tomorrow, which is what `core.orchestration.is_retryable` already says
+	about the class — and it means a sweep can never be the reason an install or a migrate fails.
+	"""
+	gateway = gateway or _gateway()
+	now = frappe.utils.now_datetime()
+
+	try:
+		sessions = gateway.stored_sessions()
+
+		stale = session_rules.select_expirable(sessions, now)
+		given_up = gateway.expire_sessions(stale, _("این پیش‌نمایش منقضی شد.")) if stale else ()
+
+		finished = session_rules.select_purgeable(sessions, now)
+		removed = gateway.purge_sessions(finished) if finished else ()
+	except (frappe.QueryDeadlockError, frappe.QueryTimeoutError):
+		frappe.db.rollback()
+
+		return {"expired": (), "purged": (), "contended": True}
+
+	return {"expired": given_up, "purged": removed, "contended": False}
 
 
 def after_install():
@@ -98,269 +149,172 @@ def after_migrate():
 	Note that `frappe.db.add_unique` commits before its ALTER, and `after_migrate` runs inside
 	`SiteMigration.post_schema_updates`'s `@atomic` block. That commit is the framework's, it is
 	why this hook must never be called from a request handler, and it is harmless here: all
-	three steps are idempotent, so a partially applied run is repaired by the next one.
+	steps are idempotent, so a partially applied run is repaired by the next one.
 	"""
 	_ensure_app_state()
 
 
-def before_uninstall():
-	"""Write a verified copy of this app's records, and stop the uninstall only if that fails.
+def after_uninstall():
+	"""Take away what the framework's own cleanup cannot see, and leave the rest alone.
 
-	This does **not** refuse an uninstall because records exist. `installer.remove_app` deletes
-	every record linked to this app's modules, so refusing was the old behaviour and it made a
-	normal uninstall impossible without hand-deleting data first. The rule now is about
-	recoverability, not permission: the uninstall proceeds, and it proceeds only after a copy
-	of the records exists and has been read back and checked.
+	By the time this runs the app is no longer installed: the DocTypes, the module, the workspace,
+	the report and both sidebars are gone, and `frappe.utils.install.delete_desktop_icon_and_sidebar`
+	has already tried to remove the navigation. It matches a desktop icon by name or `parent_icon`
+	against the app's **title**, and this app's icon is named in Persian, so the icon survives the
+	removal pointing at a sidebar that no longer exists. That orphan is removed here.
 
-	So the one thing that stops an uninstall is being unable to preserve. When the copy cannot be
-	written, or the file that was written does not contain the rows that were read, the uninstall
-	is stopped with the tables still intact, because that is the single case where continuing
-	destroys business records with nothing to restore from.
+	The three roles are the other residue: a `Role` has no link to a module, so nothing about the
+	removal reaches them. A role is deleted only when nothing else in the site refers to it — no
+	user holds it, and no permission row does. A role a user still holds is left in place and
+	reported: taking it away would change what that user can do everywhere else, which is a
+	decision for an administrator rather than a side effect of a removal.
 
-	`remove_app` runs this hook before it deletes anything (verified: the hook loop is above
-	`_delete_modules`), so the DocTypes and their rows are still readable.
-
-	Three things a reader should know before registering this:
-
-	- **It writes a file on a dry run too.** `remove_app(dry_run=True)` runs the hooks exactly
-	  like a real uninstall; nothing in `frappe.flags` distinguishes the two, so a dry run leaves
-	  a copy behind. It is a file, not a database write, but it is not obvious.
-	- **The copies are never deleted by the app.** There is no retention sweep, on purpose:
-	  quietly removing the only artifact of records that no longer exist is the opposite of what
-	  this hook is for. An operator removes them from `<site>/private/files`.
-	- **Nothing was copied before this hook was registered.** While `hooks.py` leaves it
-	  commented, `bench uninstall-app` drops the app's tables with no copy at all. That is the
-	  current state, and it is why registering this is a step of its own.
+	This hook **never raises**. By the time it runs, the app is already gone: an exception here
+	would end the command with a failure after the removal had actually succeeded, and would leave
+	an operator believing a removal that is complete had gone wrong. Anything it cannot remove is
+	logged and returned instead.
 	"""
-	populated = _populated_doctypes()
+	removed_icons, kept_icons = _retire_desktop_icons()
+	retired_roles, kept_roles = _retire_roles()
 
-	if not populated:
-		return
-
-	try:
-		path = _write_preservation_copy(populated)
-	except Exception:
-		frappe.log_error(
-			message=frappe.get_traceback(),
-			title="smartprocess_logistics: uninstall copy could not be written",
-		)
-		frappe.throw(
-			_(
-				"A complete copy of this app's records could not be written, so the uninstall was"
-				" stopped and nothing has been deleted yet. The two DocTypes still hold {0}."
-				" The cause is in the Error Log. Take a backup and export the data by hand before"
-				" uninstalling."
-			).format(_describe(populated)),
-			title=_("Records could not be preserved"),
-		)
-
-	frappe.msgprint(
-		_("A copy of this app's records was written to {0} before the uninstall dropped their tables.").format(
-			frappe.bold(path)
-		),
-		title=_("Records were preserved"),
-		indicator="green",
-	)
-
-
-def _describe(populated):
-	return ", ".join(f"{doctype}: {count}" for doctype, count in populated)
-
-
-def _populated_doctypes():
-	"""(doctype, count) for each protected DocType that exists and holds rows."""
-	counted = []
-
-	for doctype in PROTECTED_DOCTYPES:
-		if not frappe.db.exists("DocType", doctype):
-			continue
-
-		count = frappe.db.count(doctype)
-
-		if count:
-			counted.append((doctype, count))
-
-	return counted
-
-
-def _write_preservation_copy(populated):
-	"""Write the JSON copy, verify it by reading it back, and return its path.
-
-	Verification is the point: an export nobody has checked is not a recovery plan. The file is
-	re-read, parsed, and compared against what was read from the database, row for row per
-	DocType. Anything short of an exact match raises `PreservationError`, which the caller turns
-	into a stopped uninstall.
-	"""
-	payload = {
-		"app": "smartprocess_logistics",
-		"site": frappe.local.site,
-		"written_at": frappe.utils.now(),
-		"doctypes": {},
-		"singles": {},
+	return {
+		"desktop_icons": removed_icons,
+		"desktop_icons_kept": kept_icons,
+		"roles_removed": retired_roles,
+		"roles_kept": kept_roles,
 	}
 
-	for doctype, expected in populated:
-		rows = _read_all_rows(doctype, expected)
-		payload["doctypes"][doctype] = rows
 
-	for doctype in COPIED_SINGLES:
-		if frappe.db.exists("DocType", doctype):
-			payload["singles"][doctype] = frappe.get_single(doctype).as_dict()
+def _shipped_icon_names():
+	"""The names of the desktop icons this app ships, read from the files that define them."""
+	if not os.path.isdir(ICON_DIRECTORY):
+		return ()
 
-	# `default=str` is what makes this total rather than lucky: `get_list` hands back `datetime`
-	# objects and `Decimal` values, which have no JSON form, and a copy that refused to write
-	# because a cell held a decimal would be a copy that never happens.
-	document = json.dumps(payload, ensure_ascii=False, indent=1, default=str)
+	names = []
 
-	path = _write_document(document)
-
-	try:
-		_verify_written_copy(path, document)
-	except Exception:
-		# A file that failed its own check is not a copy, and leaving a raw dump of business
-		# rows on the site's disk would be a worse outcome than not having it. The cause is
-		# logged by the caller, which also stops the uninstall.
-		_remove_quietly(path)
-		raise
-
-	return path
-
-
-def _write_document(document):
-	"""Create the copy with owner-only permissions and write it. Returns the path it used.
-
-	Two deliberate choices:
-
-	- `O_EXCL`, so a second uninstall cannot overwrite the first one's copy, and a name that is
-	  somehow taken is stepped past rather than clobbered. The name carries microseconds, so
-	  this only ever matters if the clock repeats itself.
-	- mode `0o600`, because the file holds business rows and the site's `private/files` sits on
-	  the volume the whole stack shares. `os.open`'s mode is masked by the process umask, so the
-	  file is chmodded afterwards too — the `os.open` mode is what makes the window between
-	  creation and chmod not a world-readable one.
-	"""
-	base = _preservation_base()
-
-	for attempt in range(1, PRESERVATION_ATTEMPTS + 1):
-		path = f"{base}.json" if attempt == 1 else f"{base}-{attempt}.json"
-
-		try:
-			descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-		except FileExistsError:
+	for entry in sorted(os.listdir(ICON_DIRECTORY)):
+		if not entry.endswith(".json"):
 			continue
 
-		with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-			handle.write(document)
+		with open(os.path.join(ICON_DIRECTORY, entry), encoding="utf-8") as handle:
+			document = json.load(handle)
 
-		os.chmod(path, 0o600)
+		name = document.get("name") or document.get("label")
 
-		return path
+		if name:
+			names.append(name)
 
-	raise PreservationError(f"no free name for the copy under {base}.json")
-
-
-def _remove_quietly(path):
-	try:
-		os.remove(path)
-	except OSError:
-		pass
+	return tuple(names)
 
 
-def _read_all_rows(doctype, expected):
-	"""Read every row of a DocType, a page at a time, and prove the read was not lossy.
-
-	Paged rather than one unlimited query so the copy does not have to fit in memory, and
-	ordered by `name` as well as `creation` so the order is total — `name` is the primary key,
-	so it breaks every tie and the pages cannot shuffle between each other.
-
-	Three things are checked, because offset paging over a table nobody has locked can skip a
-	row or repeat one if the table changes underneath it:
-
-	1. The loop is bounded by `expected` as well as by a short page, so it terminates even if
-	   paging were ignored.
-	2. The count must equal `frappe.db.count`. A count that is *short* means the read could not
-	   see every row — usually a permission scope, since the count is unfiltered and the read is
-	   not.
-	3. No `name` may appear twice. This is the check that catches a shifting offset window: a
-	   row skipped at one boundary and a row repeated at the next keep the count equal, so only
-	   looking for duplicates proves the copy is neither short nor doubled.
-
-	`fields=["*"]` expands to every column the reader may see, which for the two DocTypes read
-	here holds no hidden or secret field.
-	"""
+def _paged(doctype, filters, fields=None):
+	"""Every row of one query, a page at a time, until a short page says there are no more."""
 	rows = []
 	offset = 0
 
-	while len(rows) < expected:
+	while True:
 		page = frappe.get_list(
-			doctype,
-			fields=["*"],
-			order_by="creation asc, name asc",
-			limit=EXPORT_PAGE_SIZE,
-			offset=offset,
+			doctype, filters=filters, fields=fields, limit=NAMES_PAGE_SIZE, offset=offset
 		)
-
-		if not page:
-			break
 
 		rows.extend(page)
+
+		if len(page) < NAMES_PAGE_SIZE:
+			return rows
+
 		offset += len(page)
 
-	if len(rows) != expected:
-		raise PreservationError(
-			f"{doctype}: read {len(rows)} rows, but the database reports {expected}. Either the"
-			" read was incomplete or the reader may not see every row."
-		)
 
-	names = [row.get("name") for row in rows]
-	repeated = len(names) - len(set(names))
+def _retire_desktop_icons():
+	"""Delete this app's desktop icons, and their children, reporting what would not go."""
+	removed = []
+	kept = []
 
-	if repeated:
-		raise PreservationError(
-			f"{doctype}: the read returned {repeated} duplicate rows, so the pages overlapped."
-			" The copy would not be a faithful one."
-		)
+	for name in _shipped_icon_names():
+		children = [row.get("name") for row in _paged("Desktop Icon", {"parent_icon": name}, ["name"])]
 
-	return rows
+		for icon in (name, *children):
+			if not frappe.db.exists("Desktop Icon", icon):
+				continue
+
+			try:
+				frappe.delete_doc("Desktop Icon", icon)
+			except Exception:
+				frappe.log_error(
+					message=frappe.get_traceback(),
+					title="smartprocess_logistics: a desktop icon could not be removed",
+				)
+				kept.append(icon)
+				continue
+
+			removed.append(icon)
+
+	return tuple(removed), tuple(kept)
 
 
-def _preservation_base():
-	directory = frappe.get_site_path("private", "files")
-	os.makedirs(directory, exist_ok=True)
+def _role_linking_fields():
+	"""Every `(doctype, fieldname)` in this site that can name a Role.
 
-	stamp = frappe.utils.now().replace(" ", "-").replace(":", "-").replace(".", "-")
-
-	return os.path.join(directory, f"smartprocess_logistics-uninstall-{stamp}")
-
-
-def _verify_written_copy(path, document):
-	"""Read the file back and check it is the copy that was prepared.
-
-	Two separate things are being trusted, so two separate checks. That the *content* is
-	complete is settled before this point, by `_read_all_rows` comparing its own count against
-	`frappe.db.count`. What is left is the *file*: a write that was truncated, interleaved with
-	another writer, or made in the wrong encoding produces a file that parses or does not, and
-	in neither case is it the copy that was prepared.
-
-	The comparison is between the file's parse and the prepared document's parse, not between
-	the file and the raw rows, because the rows hold `datetime` objects that only exist as
-	strings once serialized.
+	Read from the site's own metadata rather than listed here, and that is not thoroughness for
+	its own sake: a hardcoded list is wrong on a site whose apps differ from this one's. Measured
+	on the site this app was built on, `Role Profile Item` — the child table one would name from
+	memory — **does not exist** in this build, so counting rows on it raises a SQL error about a
+	missing table, inside the one hook that must not raise. `Has Role`, `Custom DocPerm` and
+	`DocPerm` all exist; a `Role Profile`'s children are reached through metadata instead.
 	"""
-	with open(path, encoding="utf-8") as handle:
-		written = handle.read()
+	fields = []
 
-	try:
-		parsed = json.loads(written)
-	except ValueError as exc:
-		raise PreservationError(f"the copy at {path} is not readable JSON: {exc}") from exc
+	for doctype in ("DocField", "Custom Field"):
+		if not frappe.db.exists("DocType", doctype):
+			continue
 
-	prepared = json.loads(document)
-
-	if parsed != prepared:
-		# One comparison, and the table lists in the message. A separate check for a missing
-		# table would be unreachable: it would only fire when the documents already differ.
-		raise PreservationError(
-			f"the copy at {path} does not match the copy that was prepared. Tables in the file:"
-			f" {sorted(parsed.get('doctypes', {}))}; tables prepared:"
-			f" {sorted(prepared.get('doctypes', {}))}"
+		fields.extend(
+			(row.get("parent"), row.get("fieldname"))
+			for row in _paged(
+				doctype, {"fieldtype": "Link", "options": "Role"}, ["parent", "fieldname"]
+			)
+			if row.get("parent") and row.get("fieldname")
 		)
+
+	return tuple(dict.fromkeys(fields))
+
+
+def _retire_roles():
+	"""Delete this app's roles where nothing in the site refers to them, and report the rest.
+
+	The check is made before the delete, because the framework's own check *is* the delete: it
+	refuses by raising, and this hook must not raise. A role that anything refers to is reported
+	and left alone. So is a role whose deletion the framework refuses for a reason this check did
+	not foresee: the goal is to tidy up, not to argue with the site.
+	"""
+	retired = []
+	kept = []
+	linking = _role_linking_fields()
+
+	for role in tuple(roles.ROLES):
+		if not frappe.db.exists("Role", role):
+			continue
+
+		try:
+			references = sum(
+				frappe.db.count(doctype, {field: role})
+				for doctype, field in linking
+				if frappe.db.exists("DocType", doctype)
+			)
+
+			if references:
+				kept.append(role)
+				continue
+
+			frappe.delete_doc("Role", role)
+		except Exception:
+			frappe.log_error(
+				message=frappe.get_traceback(),
+				title="smartprocess_logistics: a role could not be removed",
+			)
+			kept.append(role)
+			continue
+
+		retired.append(role)
+
+	return tuple(retired), tuple(kept)

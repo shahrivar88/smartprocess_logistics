@@ -34,6 +34,8 @@ import io
 import zipfile
 from dataclasses import dataclass
 
+from smartprocess_logistics.core.units import describe_bytes
+
 # A megabyte, as an integer, so the limits read as whole numbers.
 MEGABYTE = 1024 * 1024
 
@@ -134,7 +136,7 @@ def inspect_archive(data, limits=None):
 	if len(data) > limits.max_file_bytes:
 		raise ArchiveError(
 			CODE_FILE_TOO_LARGE,
-			f"حجم فایل بیش از {limits.max_file_bytes // MEGABYTE} مگابایت است.",
+			f"حجم فایل بیش از {describe_bytes(limits.max_file_bytes)} است.",
 		)
 
 	try:
@@ -190,7 +192,7 @@ def inspect_archive(data, limits=None):
 		if total_uncompressed > limits.max_uncompressed_bytes:
 			raise ArchiveError(
 				CODE_TOO_LARGE_UNCOMPRESSED,
-				f"حجم باز‌شدهٔ آرشیو بیش از {limits.max_uncompressed_bytes // MEGABYTE} مگابایت است.",
+				f"حجم باز‌شدهٔ آرشیو بیش از {describe_bytes(limits.max_uncompressed_bytes)} است.",
 			)
 
 		if entry.compress_size > 0:

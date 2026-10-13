@@ -2,8 +2,8 @@
 
 Rule set 2 refuses control and invisible characters instead of deleting them, and drops
 combining marks so the identity matches the database collation. The expectations here are
-lower case because `casefold` is used, not `upper`; the stored identity is hidden from
-operators, so its case never reaches a screen.
+lower case because `casefold` is used, not `upper`; the stored identity is a read-only field
+derived on the server, so the operator types only the original text in `serial_no`.
 """
 
 from dataclasses import FrozenInstanceError

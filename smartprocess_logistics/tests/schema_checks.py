@@ -10,8 +10,11 @@ The checks mirror what Frappe itself enforces when a DocType is saved, so a prob
 here is a problem that would otherwise appear as a failed install.
 """
 
+import ast
 import json
 import pathlib
+
+from smartprocess_logistics.core.normalization import NORMALIZATION_VERSION
 
 APP_ROOT = pathlib.Path(__file__).resolve().parents[2]
 MODULE_ROOT = APP_ROOT / "smartprocess_logistics" / "smartprocess_logistics"
@@ -217,6 +220,119 @@ def _check_permissions(path: pathlib.Path, doc: dict, problems: list[str]) -> No
 				problems.append(f"{path.name}: DocPerm flag {flag!r} for {role!r} must be 0 or 1")
 
 
+def expected_controller_class(doctype_name: str) -> str:
+	"""The class name Frappe resolves a controller by.
+
+	`frappe/model/base_document.py::get_controller` does
+	`classname = doctype.replace(" ", "").replace("-", "")` and then `getattr(module, classname)`.
+	The two halves have to agree, and only one of them is ours.
+	"""
+	return doctype_name.replace(" ", "").replace("-", "")
+
+
+def _check_controller(path: pathlib.Path, doc: dict, problems: list[str]) -> None:
+	"""A DocType needs an importable controller module next to its JSON, with the right class.
+
+	This is the check whose absence let a broken app reach an installation attempt: the JSON was
+	valid, so every other check here passed, and `sync_for` then died on the first DocType it
+	tried to import because `load_doctype_module` could not import the module. `doctype.py` calls
+	`run_module_method("on_doctype_update")` on every DocType it syncs, and that loads the module
+	whether or not the file defines anything.
+	"""
+	controller = path.with_suffix(".py")
+
+	if not controller.exists():
+		problems.append(
+			f"{path.name}: no controller module {controller.name} beside it. Frappe imports the"
+			" module by path while syncing, so the install fails on this DocType even though the"
+			" JSON is valid"
+		)
+		return
+
+	classname = expected_controller_class(doc.get("name") or "")
+	tree = ast.parse(controller.read_text(encoding="utf-8"))
+	declared = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+
+	if classname not in declared:
+		problems.append(
+			f"{path.name}: {controller.name} declares no class {classname!r}, which is the name"
+			f" Frappe resolves the controller by; it declares {sorted(declared) or 'nothing'}"
+		)
+
+
+def _check_set_only_once(path: pathlib.Path, doc: dict, problems: list[str]) -> None:
+	"""No field in this app may be `set_only_once`.
+
+	Frappe honours the flag only when a document is **inserted**: `Document.validate_set_only_once`
+	returns immediately unless `_doc_before_save` exists. `installer.init_singles` inserts the
+	`Logistics Settings` row before `after_install` runs, so by the time this app writes
+	`installed_on` the document already exists, the write counts as a change, and the framework
+	refuses it with `CannotChangeConstantError`. That is what stopped the installation three times.
+
+	No field here holds a value chosen at creation time, which is the only kind of value the flag
+	is for, so using it is always a defect in this app rather than a parameter to tune.
+	"""
+	for field in doc.get("fields") or []:
+		if field.get("set_only_once"):
+			problems.append(
+				f"{path.name}: field {field.get('fieldname')!r} sets set_only_once. Frappe honours"
+				" that only at insert time, and this app writes its values after the document"
+				" exists, so the write is refused"
+			)
+
+
+def _check_hidden_and_mandatory(path: pathlib.Path, doc: dict, problems: list[str]) -> None:
+	"""A hidden field that is required and has no default is refused by Frappe.
+
+	`doctype.py::check_hidden_and_mandatory` throws `HiddenAndMandatoryWithoutDefaultError` for
+	that combination, because a field nobody can see is a field nobody can fill. The rule is not
+	in the install path — it runs from the customization paths (`Custom Field`, `Customize Form`,
+	`Property Setter` and `sync_customizations_for_doctype`) — so a DocType that breaks it installs
+	cleanly and then fails the first time somebody saves it from the Desk, on a site whose
+	`developer_mode` makes that possible. Checking it here keeps that failure out of the app.
+
+	The three fields that used to break it are the two server-derived `normalized_serial` copies,
+	which are now read-only and required so a serial cannot be stored without an identity, and
+	`Logistics Import Session.token`, which stays hidden because it is a live capability and whose
+	non-emptiness is guaranteed by the `secrets.token_urlsafe` call that generates it.
+	"""
+	for field in doc.get("fields") or []:
+		if field.get("hidden") and field.get("reqd") and not field.get("default"):
+			problems.append(
+				f"{path.name}: field {field.get('fieldname')!r} is hidden and required with no"
+				" default, which Frappe refuses; either show it as read-only or drop 'reqd' and"
+				" enforce the value where it is produced"
+			)
+
+
+def _check_normalization_version(path: pathlib.Path, doc: dict, problems: list[str]) -> None:
+	"""`Logistics Settings.normalization_version` must default to the rule set the code applies.
+
+	The value is a statement about the **code**, so a definition that ships a different number is
+	a definition that lies to whoever reads the settings screen: this app shipped `1` while
+	`core.normalization.NORMALIZATION_VERSION` was `2`, and nothing said so. `setup.seeds`
+	repairs a site whose stored value has fallen behind, but the shipped default is what a fresh
+	install starts from, and the two have to agree for that repair to be a repair rather than the
+	first thing that happens.
+
+	This is the check that makes bumping the rule set a two-line change instead of a silent
+	drift: raise the constant, and this test names the file that still says otherwise.
+	"""
+	if doc.get("name") != "Logistics Settings":
+		return
+
+	for field in doc.get("fields") or []:
+		if field.get("fieldname") != "normalization_version":
+			continue
+
+		if str(field.get("default")) != str(NORMALIZATION_VERSION):
+			problems.append(
+				f"{path.name}: normalization_version defaults to {field.get('default')!r} while"
+				f" core.normalization.NORMALIZATION_VERSION is {NORMALIZATION_VERSION}; the shipped"
+				" default and the rules the app applies must be the same number"
+			)
+
+
 def check_all() -> list[str]:
 	"""Return every problem found in this app's DocType definitions."""
 	problems: list[str] = []
@@ -244,6 +360,10 @@ def check_all() -> list[str]:
 		_check_fields(path, doc, child_doctypes, problems)
 		_check_naming(path, doc, problems)
 		_check_permissions(path, doc, problems)
+		_check_controller(path, doc, problems)
+		_check_set_only_once(path, doc, problems)
+		_check_hidden_and_mandatory(path, doc, problems)
+		_check_normalization_version(path, doc, problems)
 
 	return problems
 

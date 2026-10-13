@@ -546,12 +546,15 @@ def _row_mapping(rows, submissions):
 	)
 
 
-def preview_from_text(text, request):
-	"""Read a decoded text file into a preview."""
-	if len(text) > MAX_TOKENS * 40:
+def preview_from_text(text, request, *, max_tokens=MAX_TOKENS):
+	"""Read a decoded text file into a preview.
+
+	`max_tokens` comes from the operator's row limit; see `core.limits`.
+	"""
+	if len(text) > max_tokens * 40:
 		raise ValueError("متن ورودی برای درج بسیار بزرگ است.")
 
-	tokens = split_tokens(text, DelimiterSet.of(request.delimiters))
+	tokens = split_tokens(text, DelimiterSet.of(request.delimiters), max_tokens=max_tokens)
 	candidates, issues, blank = candidates_from_tokens(tokens, request.patterns)
 
 	return build_preview(candidates, request, source_issues=issues, blank_tokens=blank)

@@ -22,6 +22,8 @@ report says so once per import instead of silently reporting a different serial.
 
 from dataclasses import dataclass
 
+from smartprocess_logistics.core.units import describe_bytes
+
 # `data_type` values this app reads. Everything else is refused by name.
 READABLE_DATA_TYPES = frozenset({"", "n", "s", "str"})
 
@@ -282,7 +284,7 @@ def read_workbook(data, limits=None, archive=None):
 	if archive.uncompressed_bytes > limits.max_declared_uncompressed_bytes:
 		raise SheetError(
 			CODE_TOO_LARGE_DECLARED,
-			f"حجم باز‌شدهٔ اعلام‌شدهٔ فایل بیش از {limits.max_declared_uncompressed_bytes // MEGABYTE} مگابایت است.",
+			f"حجم باز‌شدهٔ اعلام‌شدهٔ فایل بیش از {describe_bytes(limits.max_declared_uncompressed_bytes)} است.",
 		)
 
 	try:

@@ -8,7 +8,7 @@
  "field_order": ["label", "delimiter", "enabled"],
  "fields": [
   {"fieldname":"label","fieldtype":"Data","in_list_view":1,"label":"عنوان"},
-  {"description":"متن تحت‌اللفظی جداکننده. دنباله‌های \\r و \\n و \\t به‌صورت دو نویسه نوشته می‌شوند و هنگام خواندن فایل تفسیر می‌شوند. برای مثال، جداکنندهٔ سطر جدید ویندوز \\r\\n و تب \\t نوشته می‌شود. جداکنندهٔ خالی پذیرفته نمی‌شود.","fieldname":"delimiter","fieldtype":"Data","in_list_view":1,"label":"جداکننده","reqd":1},
+  {"description":"متن تحت‌اللفظی جداکننده. دنباله‌های \\r و \\n و \\t و \\s به‌صورت دو نویسه نوشته می‌شوند و هنگام خواندن فایل تفسیر می‌شوند. برای مثال، جداکنندهٔ سطر جدید ویندوز \\r\\n و تب \\t و فاصله \\s نوشته می‌شود. جداکنندهٔ خالی پذیرفته نمی‌شود.","fieldname":"delimiter","fieldtype":"Data","in_list_view":1,"label":"جداکننده","reqd":1},
   {"default":"1","fieldname":"enabled","fieldtype":"Check","in_list_view":1,"label":"فعال"}
  ],
  "istable": 1,

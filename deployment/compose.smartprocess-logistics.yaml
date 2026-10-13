@@ -36,6 +36,20 @@ x-logistics-app: &logistics-app
   type: bind
   source: ${SMARTPROCESS_LOGISTICS_APP_PATH}
   target: /home/frappe/frappe-bench/apps/smartprocess_logistics
+  # Read-only, like the `.pth` and the assets below. `bench install-app` writes nothing into
+  # the app directory: `sync_for` reads the DocType JSONs and inserts them into the database,
+  # and the three export paths that would write back into an app folder are all suppressed
+  # while `frappe.flags.in_import` is set, which `import_doc` sets around every DocType it
+  # inserts. Keeping this writable would let a Desk-side save of a standard DocType write a
+  # controller and a JSON straight into the working copy.
+  #
+  # What this costs, measured on a site with `developer_mode` on: saving a standard document
+  # this app ships — a workspace, a workspace sidebar, a desktop icon — makes the framework
+  # export the JSON back into this directory and fails with `Errno 30 Read-only file system`.
+  # A workspace or icon an administrator created themselves (`standard: 0`) saves normally,
+  # because nothing is exported for it. Make this writable for a development stack, and leave
+  # it read-only where the app's own navigation is shipped rather than edited.
+  read_only: true
 
 x-logistics-pth: &logistics-pth
   type: bind
@@ -43,6 +57,10 @@ x-logistics-pth: &logistics-pth
   target: /home/frappe/frappe-bench/env/lib/python3.14/site-packages/smartprocess_logistics.pth
   read_only: true
 
+# `/assets/<app>/...` is served from `sites/assets/<app>`, and in this stack `sites/assets`
+# is a symlink to `bench/assets` — so mounting the app's `public` directory at
+# `bench/assets/<app>` is what makes `app_include_css` resolve. Measured: the app's CSS is
+# served from `/assets/smartprocess_logistics/css/logistics.css` with this in place.
 x-logistics-assets: &logistics-assets
   type: bind
   source: ${SMARTPROCESS_LOGISTICS_APP_PATH}/smartprocess_logistics/public

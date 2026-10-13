@@ -1,9 +1,14 @@
 """Decoding a text file, and refusing the ones that are not text."""
 
+import base64
+
 from smartprocess_logistics.core.textfile import (
+	CODE_BAD_BASE64,
+	CODE_BAD_DATA_URL,
 	CODE_BINARY,
 	CODE_EMPTY,
 	CODE_NOT_BYTES,
+	CODE_NOT_PAYLOAD,
 	CODE_TOO_LARGE,
 	CODE_UNDECODABLE,
 	CODE_UTF16,
@@ -12,6 +17,7 @@ from smartprocess_logistics.core.textfile import (
 	TextFileError,
 	decode_text,
 	detect_utf16,
+	payload_bytes,
 )
 from smartprocess_logistics.tests.base import UnitTestCase
 
@@ -122,3 +128,63 @@ class TestUtf16Detection(UnitTestCase):
 	def test_plain_content_has_no_mark(self):
 		self.assertIsNone(detect_utf16(b"A1,B2"))
 		self.assertIsNone(detect_utf16(b""))
+
+
+WORKBOOK_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+class TestPayloadBytes(UnitTestCase):
+	"""A browser cannot put bytes into a JSON request, so a workbook arrives as a data URL.
+
+	Until this existed, `content` was encoded as UTF-8 whatever the file was, so an `.xlsx`
+	reached the workbook reader as mangled text. The point of the check is that the decode is
+	refused when it is wrong: guessing here produces something that looks like data and is not.
+	"""
+
+	def data_url(self, payload, media_type=WORKBOOK_MEDIA_TYPE):
+		return f"data:{media_type};base64," + base64.b64encode(payload).decode()
+
+	def test_bytes_pass_through_untouched(self):
+		payload = b"PK" + bytes(range(256))
+
+		self.assertEqual(payload_bytes(payload), payload)
+
+	def test_text_is_encoded_as_utf8(self):
+		self.assertEqual(payload_bytes("سلام"), "سلام".encode())
+
+	def test_a_base64_data_url_is_decoded(self):
+		payload = b"PK" + bytes(range(256)) * 4
+
+		self.assertEqual(payload_bytes(self.data_url(payload)), payload)
+
+	def test_a_data_url_without_base64_is_refused(self):
+		with self.assertRaises(TextFileError) as caught:
+			payload_bytes("data:text/plain,hello")
+
+		self.assertEqual(caught.exception.code, CODE_BAD_DATA_URL)
+
+	def test_a_data_url_with_no_payload_is_refused(self):
+		with self.assertRaises(TextFileError) as caught:
+			payload_bytes("data:text/plain;base64")
+
+		self.assertEqual(caught.exception.code, CODE_BAD_DATA_URL)
+
+	def test_broken_base64_is_refused(self):
+		with self.assertRaises(TextFileError) as caught:
+			payload_bytes("data:application/octet-stream;base64,not*valid*base64!")
+
+		self.assertEqual(caught.exception.code, CODE_BAD_BASE64)
+
+	def test_a_payload_that_is_neither_text_nor_bytes_is_refused(self):
+		for value in (None, 5, ["x"], {"a": 1}):
+			with self.subTest(value=value), self.assertRaises(TextFileError) as caught:
+				payload_bytes(value)
+
+			self.assertEqual(caught.exception.code, CODE_NOT_PAYLOAD)
+
+	def test_a_data_url_is_only_recognised_at_the_start(self):
+		"""A serial list that merely contains the word data is still text."""
+		newline = chr(10)
+		text = "1*" + newline + "data:application/octet-stream;base64,AAAA" + newline
+
+		self.assertEqual(payload_bytes(text), text.encode())

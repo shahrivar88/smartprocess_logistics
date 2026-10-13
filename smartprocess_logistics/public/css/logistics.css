@@ -1,0 +1,87 @@
+/* Desk styling for the Logistics serial dialogs.
+ *
+ * Everything here is layout and emphasis. Colour comes from Desk's own custom properties so the
+ * app follows the theme an operator has chosen, and no rule targets a direction: the dialogs are
+ * built from Desk components, which are already right-to-left under a right-to-left language.
+ */
+
+.sp-logistics-dialog .modal-body {
+	max-height: 70vh;
+	overflow-y: auto;
+}
+
+.sp-logistics-toolbar {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: space-between;
+	margin-bottom: 12px;
+}
+
+.sp-logistics-summary {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.sp-logistics-chip {
+	background: var(--control-bg);
+	border-radius: var(--border-radius);
+	padding: 2px 8px;
+	white-space: nowrap;
+}
+
+.sp-logistics-chip.is-short {
+	background: var(--red-100);
+	color: var(--red-700);
+}
+
+.sp-logistics-chip.is-complete {
+	background: var(--green-100);
+	color: var(--green-700);
+}
+
+.sp-logistics-rows td {
+	vertical-align: middle;
+}
+
+.sp-logistics-row-input {
+	max-width: 280px;
+}
+
+.sp-logistics-issues {
+	margin: 8px 0;
+	max-height: 30vh;
+	overflow-y: auto;
+}
+
+.sp-logistics-issues .sp-issue {
+	border-inline-start: 3px solid var(--border-color);
+	margin-bottom: 6px;
+	padding-inline-start: 8px;
+}
+
+.sp-logistics-issues .sp-issue.is-error {
+	border-inline-start-color: var(--red-500);
+}
+
+.sp-logistics-issues .sp-issue.is-warning {
+	border-inline-start-color: var(--orange-500);
+}
+
+.sp-logistics-issues .sp-issue .sp-issue-code {
+	color: var(--text-muted);
+	font-size: var(--text-xs);
+}
+
+.sp-logistics-empty {
+	color: var(--text-muted);
+	padding: 16px;
+	text-align: center;
+}
+
+.sp-logistics-file-hint {
+	color: var(--text-muted);
+	font-size: var(--text-sm);
+}

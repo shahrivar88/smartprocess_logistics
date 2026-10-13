@@ -15,7 +15,11 @@ The checks run in the order that costs least and refuses most:
 4. Decoding, in the caller's order, reporting every encoding that was tried.
 """
 
+import base64
+import binascii
 from dataclasses import dataclass
+
+from smartprocess_logistics.core.units import describe_bytes
 
 MEGABYTE = 1024 * 1024
 
@@ -24,12 +28,49 @@ MAX_TEXT_BYTES = 4 * MEGABYTE
 
 UTF16_BYTE_ORDER_MARKS = (b"\xff\xfe", b"\xfe\xff")
 
+DATA_URL_PREFIX = "data:"
+BASE64_MARKER = ";base64"
+
 CODE_NOT_BYTES = "TEXT_NOT_BYTES"
 CODE_EMPTY = "TEXT_EMPTY"
 CODE_TOO_LARGE = "TEXT_TOO_LARGE"
 CODE_BINARY = "TEXT_BINARY_CONTENT"
 CODE_UTF16 = "TEXT_UTF16_NOT_SUPPORTED"
 CODE_UNDECODABLE = "TEXT_UNDECODABLE"
+CODE_NOT_PAYLOAD = "TEXT_NOT_PAYLOAD"
+CODE_BAD_DATA_URL = "TEXT_BAD_DATA_URL"
+CODE_BAD_BASE64 = "TEXT_BAD_BASE64"
+
+
+def payload_bytes(content):
+	"""The payload as bytes, decoding the data URL a browser sends for a binary file.
+
+	A browser cannot put bytes into a JSON request, so an `.xlsx` arrives as
+	`data:<media type>;base64,<payload>`. Text arrives as text and is encoded here as UTF-8,
+	which `decode_text` then detects and re-decodes with the encoding it really has.
+
+	Refusing rather than guessing matters more here than elsewhere: base64-decoding a payload
+	that was not base64, or handing a workbook to the text reader, both produce something that
+	looks like data and is not.
+	"""
+	if isinstance(content, bytes):
+		return content
+
+	if not isinstance(content, str):
+		raise TextFileError(CODE_NOT_PAYLOAD, "محتوای فایل خوانده نشد.")
+
+	if not content.startswith(DATA_URL_PREFIX):
+		return content.encode()
+
+	header, separator, payload = content.partition(",")
+
+	if not separator or BASE64_MARKER not in header:
+		raise TextFileError(CODE_BAD_DATA_URL, "قالب دادهٔ فایل پشتیبانی نمی‌شود.")
+
+	try:
+		return base64.b64decode(payload, validate=True)
+	except (binascii.Error, ValueError):
+		raise TextFileError(CODE_BAD_BASE64, "محتوای base64 فایل خوانده نشد.") from None
 
 
 class TextFileError(ValueError):
@@ -70,7 +111,7 @@ def decode_text(data, encodings=DEFAULT_ENCODINGS, max_bytes=MAX_TEXT_BYTES):
 	if len(data) > max_bytes:
 		raise TextFileError(
 			CODE_TOO_LARGE,
-			f"حجم فایل بیش از {max_bytes // MEGABYTE} مگابایت است.",
+			f"حجم فایل بیش از {describe_bytes(max_bytes)} است.",
 		)
 
 	if detect_utf16(data) is not None:

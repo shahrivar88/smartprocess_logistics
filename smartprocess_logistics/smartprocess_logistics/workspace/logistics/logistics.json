@@ -1,0 +1,109 @@
+{
+ "app": "smartprocess_logistics",
+ "charts": [],
+ "content": "[{\"id\":\"sp_logistics_header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><a href=\\\"/app/logistics\\\">سریال لجستیک</a></span>\",\"col\":12}},{\"id\":\"sp_logistics_para\",\"type\":\"paragraph\",\"data\":{\"text\":\"شماره سریال گارانتی هر ردیف فاکتور فروش، دستی یا از فایل، در همین ماژول ثبت و پیگیری می‌شود.\",\"col\":12}},{\"id\":\"sp_logistics_card_report\",\"type\":\"card\",\"data\":{\"card_name\":\"گزارش‌ها\",\"col\":4}},{\"id\":\"sp_logistics_card_serials\",\"type\":\"card\",\"data\":{\"card_name\":\"سریال‌ها\",\"col\":4}},{\"id\":\"sp_logistics_card_setup\",\"type\":\"card\",\"data\":{\"card_name\":\"تنظیمات\",\"col\":4}}]",
+ "creation": "2026-10-13 06:00:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "tag",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "سریال لجستیک",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "گزارش‌ها",
+   "link_count": 1,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "کسری سریال فروش",
+   "link_count": 0,
+   "link_to": "Missing Sales Serials",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "سریال‌ها",
+   "link_count": 3,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "شماره سریال",
+   "link_count": 0,
+   "link_to": "Logistics Serial",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "ارجاع سریال به فاکتور",
+   "link_count": 0,
+   "link_to": "Logistics Serial Assignment",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "پیش‌نمایش درج",
+   "link_count": 0,
+   "link_to": "Logistics Import Session",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "تنظیمات",
+   "link_count": 1,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "تنظیمات سریال",
+   "link_count": 0,
+   "link_to": "Logistics Settings",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-10-13 08:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SmartProcess Logistics",
+ "name": "Logistics",
+ "number_cards": [],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [],
+ "sequence_id": 30.0,
+ "shortcuts": [],
+ "title": "سریال لجستیک",
+ "type": "Workspace"
+}

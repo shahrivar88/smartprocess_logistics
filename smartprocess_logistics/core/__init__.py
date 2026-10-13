@@ -16,6 +16,8 @@ The modules and what each one decides:
 - `eligibility`: which invoices the missing-serial report may cover.
 - `validation`: everything above combined into one registration plan, plus the checks that
   keep a configuration from being ambiguous.
+- `limits`: which of an operator's ceilings apply to a payload, and the rule that one may only
+  tighten the ceilings the readers were built against.
 
 Errors are raised as exceptions carrying a stable machine-readable `code` beside a message,
 so a caller can translate or group them without matching on prose.

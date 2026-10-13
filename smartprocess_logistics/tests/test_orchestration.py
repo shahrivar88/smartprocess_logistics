@@ -11,6 +11,7 @@ are database guarantees listed in `test_orchestration.py`'s `NEEDS_A_DATABASE` n
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from smartprocess_logistics.core import normalization
 from smartprocess_logistics.core import session as session_rules
 from smartprocess_logistics.core.authz import (
 	ROLE_EDITOR,
@@ -44,7 +45,12 @@ from smartprocess_logistics.core.orchestration import (
 	run_rewrite,
 )
 from smartprocess_logistics.core.session import PREPARED, ImportSession
-from smartprocess_logistics.core.validation import ExistingAssignment, InvoiceRow
+from smartprocess_logistics.core.validation import (
+	CODE_DUPLICATE_IN_ROW,
+	CODE_EXCESS_QUANTITY,
+	ExistingAssignment,
+	InvoiceRow,
+)
 from smartprocess_logistics.tests.base import UnitTestCase
 
 # Anything a fake cannot decide, and a real site has to:
@@ -83,6 +89,7 @@ class FakeGateway:
 	written: list = field(default_factory=list)
 	deleted_rows: list = field(default_factory=list)
 	applied: list = field(default_factory=list)
+	serial_requests: tuple = ()
 
 	def _record(self, name):
 		self.calls.append(name)
@@ -126,11 +133,12 @@ class FakeGateway:
 
 	def find_or_create_serials(self, requests):
 		self._record("find_or_create_serials")
+		self.serial_requests = requests
 
 		by_normalized = {}
 		created = []
 
-		for item_code, normalized, _original in requests:
+		for item_code, normalized, _original, _version in requests:
 			by_normalized[(item_code, normalized)] = f"LS-{item_code}-{normalized}"
 			created.append(f"LS-{item_code}-{normalized}")
 
@@ -241,7 +249,10 @@ class TestBuildRewritePlan(UnitTestCase):
 
 
 class TestRunRewrite(UnitTestCase):
-	def test_a_successful_rewrite_writes_and_deletes_in_order(self):
+	def test_an_import_writes_in_order_and_deletes_nothing(self):
+		# `rewrite()` names no replaced row, which is the shape `confirm_import` builds. An
+		# import adds to a row that may already hold serials the file never mentions, so the
+		# rows it fills keep what they have.
 		gateway = FakeGateway()
 		outcome = run_rewrite(rewrite(), gateway)
 
@@ -255,11 +266,22 @@ class TestRunRewrite(UnitTestCase):
 				"read_rows",
 				"read_existing",
 				"lock_serials",
-				"delete_row_assignments",
 				"find_or_create_serials",
 				"insert_assignments",
 			],
 		)
+		self.assertEqual(gateway.deleted_rows, [])
+		self.assertEqual(outcome.deleted, 0)
+
+	def test_an_import_keeps_what_the_row_already_has(self):
+		gateway = FakeGateway(
+			existing=(ExistingAssignment(row_key="row-1", normalized_serial="a0"),)
+		)
+		outcome = run_rewrite(rewrite(submissions=(("row-1", "A1"),)), gateway)
+
+		self.assertEqual(outcome.accepted, 1)
+		self.assertEqual(gateway.deleted_rows, [])
+		self.assertEqual(outcome.deleted, 0)
 
 	def test_the_invoice_is_locked_before_anything_is_read_or_written(self):
 		gateway = FakeGateway()
@@ -277,6 +299,17 @@ class TestRunRewrite(UnitTestCase):
 		self.assertEqual(written.normalized_serial, "ab-12")
 		self.assertEqual(written.sales_invoice_item, "row-1")
 		self.assertEqual(written.company, "Alpha")
+
+	def test_the_rule_set_that_normalized_a_serial_travels_with_it(self):
+		# The version is the one the normalization actually ran with, so a serial created after a
+		# rule change is not relabelled with the new rules' number.
+		gateway = FakeGateway()
+		run_rewrite(rewrite(submissions=(("row-1", "A1"),)), gateway)
+
+		self.assertEqual(
+			gateway.serial_requests,
+			(("ITEM-1", "a1", "A1", normalization.NORMALIZATION_VERSION),),
+		)
 
 	def test_a_row_that_disappeared_stops_the_write(self):
 		gateway = FakeGateway(rows=(ROW_1,))
@@ -307,6 +340,12 @@ class TestRunRewrite(UnitTestCase):
 		self.assertEqual(caught.exception.code, CODE_INVOICE_CHANGED)
 
 	def test_an_excess_is_caught_by_the_revalidation_and_nothing_is_written(self):
+		"""The validator's own code survives, so a caller can tell which rule was broken.
+
+		This used to assert `CODE_PAYLOAD_CHANGED` for every validation failure, which made an
+		excess, a duplicate and an over-long serial indistinguishable in the code — the half of
+		the error a client switches on — while the message told them apart.
+		"""
 		gateway = FakeGateway()
 		plan = rewrite(
 			rows=(ROW_1,),
@@ -316,9 +355,19 @@ class TestRunRewrite(UnitTestCase):
 		with self.assertRaises(OrchestrationError) as caught:
 			run_rewrite(plan, gateway)
 
-		self.assertEqual(caught.exception.code, CODE_PAYLOAD_CHANGED)
+		self.assertEqual(caught.exception.code, CODE_EXCESS_QUANTITY)
 		self.assertEqual(gateway.written, [])
 		self.assertEqual(gateway.deleted_rows, [])
+
+	def test_a_duplicate_in_one_row_keeps_the_validators_code(self):
+		gateway = FakeGateway()
+		plan = rewrite(rows=(ROW_1,), submissions=(("row-1", "A1"), ("row-1", "a1")))
+
+		with self.assertRaises(OrchestrationError) as caught:
+			run_rewrite(plan, gateway)
+
+		self.assertEqual(caught.exception.code, CODE_DUPLICATE_IN_ROW)
+		self.assertEqual(gateway.written, [])
 
 	def test_a_duplicate_inside_the_file_is_caught_before_anything_is_deleted(self):
 		gateway = FakeGateway()
@@ -343,7 +392,7 @@ class TestRunRewrite(UnitTestCase):
 		gateway = FakeGateway(fail_on="insert_assignments")
 
 		with self.assertRaises(RuntimeError):
-			run_rewrite(rewrite(), gateway)
+			run_rewrite(rewrite(only_rows=("row-1",)), gateway)
 
 		self.assertIn("delete_row_assignments", gateway.calls)
 		self.assertNotIn("mark_session_applied", gateway.calls)
@@ -365,6 +414,33 @@ class TestRunRewrite(UnitTestCase):
 
 		self.assertEqual(outcome.rewrite_rows, ("row-1",))
 		self.assertEqual(gateway.deleted_rows, ["row-1"])
+
+	def test_a_named_row_may_be_written_with_the_serials_it_already_has(self):
+		# The end-to-end shape of a correction: the row is named as replaced, so the serials it
+		# already holds are not duplicates, and its assignments are removed before the new set is
+		# written. `plan_registration` alone cannot show the deletion order, which is the half
+		# that has to happen first.
+		gateway = FakeGateway(
+			existing=(
+				ExistingAssignment(row_key="row-1", normalized_serial="a1"),
+				ExistingAssignment(row_key="row-1", normalized_serial="a2"),
+			)
+		)
+		# `ROW_1` needs two serials. Sending one it already holds and one it does not is the
+		# smallest correction: two accepted, both stored serials rewritten.
+		plan = rewrite(submissions=(("row-1", "A1"), ("row-1", "A9")), only_rows=("row-1",))
+
+		outcome = run_rewrite(plan, gateway)
+
+		self.assertEqual(outcome.accepted, 2)
+		self.assertEqual(outcome.deleted, 2)
+		self.assertEqual(gateway.deleted_rows, ["row-1"])
+		self.assertLess(
+			gateway.calls.index("delete_row_assignments"), gateway.calls.index("insert_assignments")
+		)
+		self.assertEqual(
+			sorted(written.normalized_serial for written in gateway.written), ["a1", "a9"]
+		)
 
 
 class TestRunConfirmation(UnitTestCase):

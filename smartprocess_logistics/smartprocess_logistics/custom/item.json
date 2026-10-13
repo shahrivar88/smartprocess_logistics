@@ -1,0 +1,20 @@
+{
+ "custom_fields": [
+  {
+   "default": "0",
+   "description": "کالاهایی که این تیک را دارند، در گزارش «کسری سریال» بررسی می‌شوند. این پرچم مستقل از «شماره سریال انبار» خود ERPNext است و آن را روشن نمی‌کند. پرچم همان‌طور که الان هست خوانده می‌شود، نه آن‌طور که هنگام ثبت فاکتور بود: خاموش‌کردنش فاکتورهای قدیمی همان کالا را از گزارش بیرون می‌برد و روشن‌کردنش آن‌ها را برمی‌گرداند.",
+   "dt": "Item",
+   "fieldname": "sp_serial_required",
+   "fieldtype": "Check",
+   "in_standard_filter": 1,
+   "insert_after": "has_serial_no",
+   "label": "نیازمند شماره سریال",
+   "module": "SmartProcess Logistics"
+  }
+ ],
+ "custom_perms": [],
+ "doctype": "Item",
+ "links": [],
+ "property_setters": [],
+ "sync_on_migrate": 1
+}

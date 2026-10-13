@@ -1,0 +1,119 @@
+{
+ "app": "smartprocess_logistics",
+ "creation": "2026-10-13 06:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Workspace Sidebar",
+ "header_icon": "tag",
+ "idx": 0,
+ "items": [
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "home",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "سریال لجستیک",
+   "link_to": "Logistics",
+   "link_type": "Workspace",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "file-text",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "گزارش‌ها",
+   "show_arrow": 0,
+   "type": "Section Break"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "file-text",
+   "indent": 1,
+   "keep_closed": 0,
+   "label": "کسری سریال فروش",
+   "link_to": "Missing Sales Serials",
+   "link_type": "Report",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "hash",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "سریال‌ها",
+   "show_arrow": 0,
+   "type": "Section Break"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "hash",
+   "indent": 1,
+   "keep_closed": 0,
+   "label": "شماره سریال",
+   "link_to": "Logistics Serial",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "link",
+   "indent": 1,
+   "keep_closed": 0,
+   "label": "ارجاع سریال به فاکتور",
+   "link_to": "Logistics Serial Assignment",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "upload",
+   "indent": 1,
+   "keep_closed": 0,
+   "label": "پیش‌نمایش درج",
+   "link_to": "Logistics Import Session",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "settings",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "تنظیمات",
+   "show_arrow": 0,
+   "type": "Section Break"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "settings",
+   "indent": 1,
+   "keep_closed": 0,
+   "label": "تنظیمات سریال",
+   "link_to": "Logistics Settings",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-10-13 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SmartProcess Logistics",
+ "name": "سریال لجستیک",
+ "owner": "Administrator",
+ "standard": 1,
+ "title": "سریال لجستیک"
+}
