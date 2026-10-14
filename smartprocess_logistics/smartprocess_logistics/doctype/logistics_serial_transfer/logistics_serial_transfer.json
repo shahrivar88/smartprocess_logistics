@@ -1,0 +1,259 @@
+{
+ "actions": [],
+ "allow_import": 0,
+ "allow_rename": 0,
+ "autoname": "LST-.YYYY.-.#####",
+ "creation": "2026-10-14 09:00:00.000000",
+ "doctype": "DocType",
+ "document_type": "Transaction",
+ "engine": "InnoDB",
+ "field_order": [
+  "invoices_section",
+  "source_invoice",
+  "invoice_column",
+  "target_invoice",
+  "scope_section",
+  "company",
+  "scope_column",
+  "confirmed_token",
+  "result_section",
+  "source_total",
+  "result_column",
+  "moved_count",
+  "refused_count",
+  "unselected_count",
+  "acknowledged_count",
+  "restore_section",
+  "restored_from",
+  "restore_column",
+  "restored_on",
+  "restored_by",
+  "items_section",
+  "items",
+  "notes_section",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "invoices_section",
+   "fieldtype": "Section Break",
+   "label": "فاکتورها"
+  },
+  {
+   "description": "نام فاکتور لغو‌شده‌ای که سریال‌ها روی آن ثبت شده‌اند. این فاکتور پس از انتقال هم دست‌نخورده می‌ماند: هیچ ردیفی از ثبت‌های آن حذف یا بازنویسی نمی‌شود. نوعش Link نیست و Data است، و دلیلش یک قاعدهٔ فریمورک است نه سلیقه: در base_document.get_invalid_links هر DocType ثبت‌شونده (is_submittable) که به سندی با docstatus=2 لینک بدهد، در _validate_links با CancelledLinkError رد می‌شود، و تنها استثنای آن فیلدی است که نامش دقیقاً amended_from باشد — نامی که این رکورد نمی‌تواند بگیرد، چون آن‌وقت خودِ سابقه یک «اصلاحیه» شمرده می‌شود و فریمورک انتظار دارد سند لینک‌شده از همین DocType و لغو‌شده باشد. ماندن روی Link یعنی یا flag ignore_links و خاموش‌کردن اعتبارسنجی لینک‌ها، یا درج نشدن این رکورد. فاکتور لغو‌شده برخلاف فاکتور ثبت‌شده قابل حذف است، پس نام ساده اینجا از Link هم درست‌تر است: سابقه به سندی گره نمی‌خورد که ممکن است دیگر نباشد.",
+   "fieldname": "source_invoice",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "فاکتور لغو‌شده (مبدأ)",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "invoice_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "فاکتور اصلاحی که سریال‌ها روی آن نوشته می‌شوند. باید همان فاکتوری باشد که با amended_from به فاکتور مبدأ اشاره می‌کند، لغو نشده باشد و شرکتش با مبدأ یکی باشد. برخلاف مبدأ، Link می‌ماند: این سند زنده است و کارمی‌برنده ممکن است بخواهد از همین‌جا به آن برود. اگر روزی این فاکتور هم لغو شود، رکورد دست‌نخورده می‌ماند؛ چون رکورد ثبت‌شده است و دیگر بازنویسی نمی‌شود، اعتبارسنجی لینک دوباره روی آن اجرا نمی‌شود.",
+   "fieldname": "target_invoice",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "فاکتور اصلاحی (مقصد)",
+   "options": "Sales Invoice",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "scope_section",
+   "fieldtype": "Section Break",
+   "label": "دامنهٔ انتقال"
+  },
+  {
+   "description": "شرکت مشترک دو فاکتور. یک فیلد است و نه دو فیلد، چون انتقال بین دو شرکت پذیرفته نمی‌شود و دو فیلد می‌توانست دو مقدار ناهمخوان را نشان دهد. برای جداسازی دسترسی هم به کار می‌آید: قواعد استاندارد User Permission فریمورک ردیف‌های شرکت‌های مجاز کاربر را محدود می‌کند.",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "in_list_view": 1,
+   "label": "شرکت",
+   "options": "Company",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "scope_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "اثر انگشت آن انتخابی که کارمی‌برنده تأیید کرد: کدام مبدأ، کدام مقصد، کدام سریال‌ها، کدام ردیف‌ها، کدام تأییدها. هنگام اعمال دوباره از روی وضعیت پایگاه داده محاسبه و سنجیده می‌شود، تا پنجرهٔ کهنه‌ای نتواند سریالی جز آنچه نشان داد جابه‌جا کند.",
+   "fieldname": "confirmed_token",
+   "fieldtype": "Data",
+   "label": "اثر انگشت تأیید",
+   "read_only": 1
+  },
+  {
+   "fieldname": "result_section",
+   "fieldtype": "Section Break",
+   "label": "نتیجه"
+  },
+  {
+   "description": "تعداد سریال‌هایی که فاکتور مبدأ در زمان انتقال نگه می‌داشت. ذخیره می‌شود چون سریال‌های انتخاب‌نشده ردیفی در جدول پایین ندارند و بدون این عدد معلوم نمی‌شد مبدأ چند سریال داشته است. مبدأ لغو‌شده است و سریال جدید نمی‌پذیرد، پس این عدد و مجموعهٔ ثبت‌هایش پس از این تغییر نمی‌کنند و آنچه انتخاب نشد از تفاضل همین دو به‌دست می‌آید.",
+   "fieldname": "source_total",
+   "fieldtype": "Int",
+   "label": "سریال‌های مبدأ",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "result_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "moved_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "منتقل‌شده",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "description": "سریال‌هایی که شکست خوردند، هر کدام با دلیل خودش در جدول پایین. پر بودن این عدد یک خطا نیست: وقتی فاکتور اصلاحی کمتر از مبدأ کالا می‌فاکتور کند، همین عدد عادی‌ترین حالت است.",
+   "fieldname": "refused_count",
+   "fieldtype": "Int",
+   "label": "رد‌شده",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "description": "سریال‌هایی که کارمی‌برنده نخواست منتقل شوند. دربارهٔ آن‌ها هیچ تصمیمی گرفته نشد و هیچ دلیلی هم نوشته نمی‌شود.",
+   "fieldname": "unselected_count",
+   "fieldtype": "Int",
+   "label": "انتخاب‌نشده",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "description": "سریال‌هایی که روی فاکتور فعال دیگری ثبت بودند و کارمی‌برنده آن را دیده و تأیید کرده است. یک پرچم هشدار است و نه خطا: این برنامه هرگز قاعدهٔ یکتایی سراسری نداشته و ساختنش اکنون، دادهٔ موجود را متهم می‌کرد.",
+   "fieldname": "acknowledged_count",
+   "fieldtype": "Int",
+   "label": "تأییدشده روی فاکتور دیگر",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "items_section",
+   "fieldtype": "Section Break",
+   "label": "سریال‌ها"
+  },
+  {
+   "fieldname": "restore_section",
+   "fieldtype": "Section Break",
+   "label": "بازآوری از آرشیو"
+  },
+  {
+   "description": "از کدام سایت بازآوری شد. این سه فیلد تنها چیزی است که یک سابقهٔ بازآوری‌شده را از سابقه‌ای که همین‌جا انجام شده جدا می‌کند، و فقط مسیر بازآوری آن‌ها را پر می‌کند: یک سابقهٔ اصلی هر سه را خالی دارد. اینکه *عمل* از کی بوده دست‌نخورده می‌ماند — creation و owner همان کاربر و همان لحظهٔ اصلی‌اند — و این‌ها فقط می‌گویند خودِ این سند این‌جا از یک آرشیو ساخته شده است. مقصدِ بازآوری نمی‌تواند سابقه‌ای جعل کند که ادعا کند در این سایت انجام شده باشد.",
+   "fieldname": "restored_from",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "سایت مبدأ آرشیو",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "restore_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "لحظه‌ای که این سند روی این سایت از آرشیو ساخته شد. خالی برای سابقه‌ای که همین‌جا انجام شده.",
+   "fieldname": "restored_on",
+   "fieldtype": "Datetime",
+   "label": "زمان بازآوری",
+   "read_only": 1
+  },
+  {
+   "description": "کاربری که بازآوری را انجام داد. پشت هر سابقهٔ بازآوری‌شده یک کاربر مشخص این‌جاست، جدا از کسی که عمل اصلی را انجام داده بود.",
+   "fieldname": "restored_by",
+   "fieldtype": "Link",
+   "label": "بازآورنده",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "description": "یک ردیف برای هر سریالی که مبدأ نگه می‌داشت و تصمیمی درباره‌اش گرفته شد: منتقل‌شده‌ها و رد‌شده‌ها. سریال‌های انتخاب‌نشده ردیف ندارند، چون هیچ تصمیمی درباره‌شان گرفته نشد.",
+   "fieldname": "items",
+   "fieldtype": "Table",
+   "label": "سریال‌ها",
+   "options": "Logistics Serial Transfer Item"
+  },
+  {
+   "fieldname": "notes_section",
+   "fieldtype": "Section Break",
+   "label": "یادداشت"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "یادداشت"
+  }
+ ],
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-10-14 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SmartProcess Logistics",
+ "name": "Logistics Serial Transfer",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Logistics Serial Viewer",
+   "share": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Logistics Serial Editor",
+   "share": 1,
+   "submit": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Logistics Serial Manager",
+   "share": 1,
+   "submit": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1
+  }
+ ],
+ "quick_entry": 0,
+ "row_format": "Dynamic",
+ "search_fields": "source_invoice,target_invoice,company",
+ "show_title_field_in_link": 1,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "source_invoice",
+ "track_changes": 0,
+ "translated_doctype": 1
+}

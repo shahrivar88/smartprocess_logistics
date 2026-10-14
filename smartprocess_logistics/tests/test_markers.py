@@ -1,9 +1,6 @@
 """Marker pattern validation, whole-token matching and ambiguity detection."""
 
-from smartprocess_logistics.tests.base import UnitTestCase
-
 from smartprocess_logistics.core.markers import (
-	CODE_AMBIGUOUS,
 	CODE_BRACKETS,
 	CODE_EMPTY,
 	CODE_INDEX_NOT_POSITIVE,
@@ -21,6 +18,7 @@ from smartprocess_logistics.core.markers import (
 	parse_pattern,
 	parse_patterns,
 )
+from smartprocess_logistics.tests.base import UnitTestCase
 
 
 class TestParsePattern(UnitTestCase):

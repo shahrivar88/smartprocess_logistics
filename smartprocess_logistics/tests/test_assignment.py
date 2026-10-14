@@ -1,5 +1,7 @@
 """The derived identity on an assignment, and the rules that keep it true."""
 
+import dataclasses
+
 from smartprocess_logistics.core.assignment import (
 	CODE_IDENTITY_MISMATCH,
 	CODE_IDENTITY_SUPPLIED,
@@ -77,7 +79,9 @@ class TestDerivedValues(UnitTestCase):
 				self.assertEqual(caught.exception.code, CODE_SERIAL_MISSING)
 
 	def test_the_built_values_are_frozen(self):
-		with self.assertRaises(Exception):
+		# The exact exception, not `Exception`: a blind assert passes for a typo as readily as for
+		# a frozen field, and this test is about the field being frozen.
+		with self.assertRaises(dataclasses.FrozenInstanceError):
 			values().normalized_serial = "other"
 
 

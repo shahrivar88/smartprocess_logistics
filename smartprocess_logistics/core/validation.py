@@ -18,13 +18,14 @@ themselves comes back as an issue so a caller can show all of them at once.
 from dataclasses import dataclass, field
 
 from smartprocess_logistics.core import delimiters as delimiter_rules
+from smartprocess_logistics.core import eligibility, normalization, quantities
 from smartprocess_logistics.core import markers as marker_rules
-from smartprocess_logistics.core import normalization, quantities
 
 MAX_ROWS = 2000
 MAX_SUBMISSIONS = 5000
 
 CODE_UNKNOWN_ROW = "ROW_UNKNOWN"
+CODE_ROW_NOT_ELIGIBLE = "ROW_NOT_ELIGIBLE"
 CODE_DUPLICATE_IN_ROW = "DUPLICATE_IN_ROW"
 CODE_DUPLICATE_IN_INVOICE = "DUPLICATE_IN_INVOICE"
 CODE_ALREADY_REGISTERED = "ALREADY_REGISTERED"
@@ -57,11 +58,19 @@ class RegistrationError(ValueError):
 
 @dataclass(frozen=True)
 class InvoiceRow:
-	"""One item row of the invoice under registration."""
+	"""One item row of the invoice under registration.
+
+	`serial_required` is the row's item's `sp_serial_required` flag, and it is **required rather
+	than defaulted**: a row built without it would be a row whose eligibility nobody decided, and
+	a default would decide it silently — in the direction that writes or in the direction that
+	refuses, either way without anybody saying so. The gateway reads it from the item, which is
+	the only place it exists.
+	"""
 
 	row_key: str
 	item_code: str
 	invoiced_qty: float
+	serial_required: bool
 
 
 @dataclass(frozen=True)
@@ -189,7 +198,6 @@ def plan_registration(
 	replaced_rows=(),
 	delimiters=(),
 	policy=None,
-	allow_over_quantity=False,
 ):
 	"""Decide what may be registered and what is wrong.
 
@@ -237,6 +245,23 @@ def plan_registration(
 				SerialIssue(
 					code=CODE_UNKNOWN_ROW,
 					message=f"ردیف فاکتور پیدا نشد: {row_key}",
+					row_key=row_key,
+					serials=(raw_serial,),
+				)
+			)
+			continue
+
+		# A row whose item is not marked for serials is not a row this app registers on, and the
+		# window is not the authority on that: the window does not draw it, and this refuses it, so
+		# a request that names one — an old client, a script, a window that was not reloaded — is
+		# answered rather than obeyed. It is a rule about **adding** a label: `delete_assignments`
+		# does not come through here, so the registrations such a row already holds stay removable,
+		# and a row is never silently given to another row's item.
+		if not eligibility.is_eligible(row.serial_required):
+			issues.append(
+				SerialIssue(
+					code=CODE_ROW_NOT_ELIGIBLE,
+					message="برای کالای این ردیف ثبت سریال فعال نیست.",
 					row_key=row_key,
 					serials=(raw_serial,),
 				)
@@ -302,8 +327,10 @@ def plan_registration(
 		accepted_counts[row_key] = accepted_counts.get(row_key, 0) + 1
 		accepted.append(AcceptedSerial(row_key=row_key, item_code=row.item_code, serial=serial))
 
-	if not allow_over_quantity:
-		issues += _excess_issues(rows_by_key, existing_counts, accepted_counts, accepted)
+	# Unconditional: a row may never hold more serials than its invoiced quantity. This used to be
+	# switched off by `allow_over_quantity`, and it is not optional any more — the cap is the rule,
+	# not a site preference, and every registration path comes through here.
+	issues += _excess_issues(rows_by_key, existing_counts, accepted_counts, accepted)
 
 	coverages = _coverages(rows_by_key, existing_counts, accepted_counts)
 

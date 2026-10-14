@@ -37,7 +37,7 @@ class TestSetOnlyOnceIsRefused(UnitTestCase):
 	"""
 
 	def test_no_field_in_this_app_sets_set_only_once(self):
-		for path, doc in self.definitions():
+		for _path, doc in self.definitions():
 			for field in doc.get("fields") or []:
 				with self.subTest(doctype=doc["name"], field=field.get("fieldname")):
 					self.assertNotIn("set_only_once", field)
@@ -171,7 +171,7 @@ class TestHiddenAndMandatoryIsRefused(UnitTestCase):
 	"""
 
 	def test_no_field_in_this_app_is_hidden_and_required_without_a_default(self):
-		for path, doc in self.definitions():
+		for _path, doc in self.definitions():
 			for field in doc.get("fields") or []:
 				with self.subTest(doctype=doc["name"], field=field.get("fieldname")):
 					refused = field.get("hidden") and field.get("reqd") and not field.get("default")

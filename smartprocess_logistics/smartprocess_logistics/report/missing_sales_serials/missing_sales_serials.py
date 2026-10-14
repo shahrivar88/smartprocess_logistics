@@ -1,10 +1,14 @@
 """The Missing Sales Serials report.
 
-The statement is built by `core.reports`, where the eligibility rule, the company isolation and
+The statement is built by `core.reports`, where the requirement rule, the company isolation and
 the permission conditions live, and the shortage is read from `core.quantities`, where the
-requirement rule lives. This module is the four things a report has to supply and nothing else:
-the filters, the acting principal, the installation timestamp, and the invoice permission
-conditions the framework would apply to a list of the same rows.
+quantity rule lives. This module is the three things a report has to supply and nothing else:
+the filters, the acting principal, and the invoice permission conditions the framework would
+apply to a list of the same rows.
+
+No installation timestamp is read here, and none is passed on. The report covers every invoice
+the site holds; an invoice older than the app is audited like any other, because what decides a
+shortage is the item's own flag, not when the invoice was written.
 
 Two things about it are worth stating.
 
@@ -24,7 +28,6 @@ from frappe import _
 from smartprocess_logistics.api.gateway import FrappeGateway
 from smartprocess_logistics.core.quantities import row_coverage
 from smartprocess_logistics.core.reports import (
-	CODE_NOT_INSTALLED,
 	MISSING_COLUMNS,
 	MissingFilters,
 	ReportError,
@@ -69,21 +72,14 @@ def execute(filters=None):
 	filters = frappe._dict(filters or {})
 
 	gateway = FrappeGateway()
-	settings = gateway.settings()
 
 	try:
 		query = build_missing_query(
 			_missing_filters(filters),
 			gateway.principal(),
-			installed_on=settings.installed_on,
 			permission_conditions=_invoice_permission_conditions(),
 		)
 	except ReportError as error:
-		# A report with no installation timestamp cannot be answered, and an empty table would
-		# read as "every invoice is complete". The refusal says which of the two it is.
-		if error.code == CODE_NOT_INSTALLED:
-			frappe.throw(error.message, title=_("کسری سریال"))
-
 		frappe.throw(error.message, title=_("کسری سریال"))
 
 	rows = frappe.db.sql(query.sql, query.params, as_dict=True)

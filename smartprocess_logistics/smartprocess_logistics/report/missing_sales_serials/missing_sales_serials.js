@@ -2,8 +2,9 @@
 //
 // The window is deliberately open by default. A report that silently covers ninety days answers
 // a question nobody asked and hides the rows outside it, so the operator narrows it or reads all
-// of it; the eligibility cut-off is the installation timestamp, which is a filter the server
-// applies and this file cannot remove.
+// of it — and the only date the server applies is the one typed into `from_date`/`to_date`. An
+// invoice older than the app is reported like any other: what makes a row a shortage is the
+// item's `sp_serial_required` flag, not when the invoice was written.
 
 frappe.query_reports["Missing Sales Serials"] = {
 	filters: [

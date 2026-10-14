@@ -20,17 +20,22 @@ The two reports differ in what they are *about*, and that difference drives most
 
 What the missing report can and cannot know
 -------------------------------------------
-The report covers only invoices whose `Sales Invoice.creation` is at or after
-`Logistics Settings.installed_on`, and a row qualifies only when its **item's current**
-`sp_serial_required` flag is on. Both halves of that are worth stating plainly:
+A row qualifies when its **item's current** `sp_serial_required` flag is on, and for no other
+reason. The invoice's age is not part of the question:
 
-- Before the app was installed, nothing recorded whether an item needed a serial, so an invoice
-  created earlier cannot be judged and is left out. An invoice created earlier and submitted
-  later stays out too: creation is the marker, and submission is not stored on the invoice.
-- The item flag is read **as it is now**, not as it was when the invoice was written. Turning
-  the flag off on an item removes its older invoices from the report; turning it on adds them.
-  That is unresolved historical semantics, not a defect in the query, and it is listed in
-  `docs/integrity-invariants.md` rather than papered over with a snapshot nobody approved.
+- **No date is an implicit filter.** The report once covered only invoices created at or after
+  `Logistics Settings.installed_on`, which left every older invoice unaudited however short it
+  was. What decides a shortage is the item's flag, read when the report runs, and that says
+  nothing about when the invoice was written — so an invoice from before the app was installed is
+  reported like any other, and stays reported across an upgrade, a reinstall, a restore, a move to
+  another server, or a change to that timestamp. `core.eligibility` states the rule, and the
+  install timestamp keeps the only job it ever really had: `setup/seeds.py` writes it and reads it
+  back to know whether the app's own seeding finished.
+- **Explicit filters stay explicit.** A date range the operator types is applied to the posting
+  date, as it always was; nothing else is filtered by date at all.
+- **An unmarked item cannot be short.** The flag is read as it is now, not as it was when the
+  invoice was written, so marking an item adds its rows to the report and unmarking it removes
+  them. That is the same rule the scan station applies when it calls a column optional.
 
 A third thing the report deliberately does not do: an assignment whose invoice item row was
 deleted is orphaned, it matches no row, and it therefore counts towards nothing. The Register
@@ -53,7 +58,6 @@ DOCSTATUS_DRAFT = 0
 DOCSTATUS_SUBMITTED = 1
 DOCSTATUS_CANCELLED = 2
 
-CODE_NOT_INSTALLED = "REPORT_NOT_INSTALLED"
 CODE_BAD_PAGE = "REPORT_BAD_PAGE_LENGTH"
 CODE_BAD_DATE_RANGE = "REPORT_BAD_DATE_RANGE"
 CODE_BAD_DOCSTATUS = "REPORT_BAD_DOCSTATUS"
@@ -97,16 +101,6 @@ class Query:
 	def is_single_statement(self):
 		"""Whether the statement is one statement. A report never contains a statement separator."""
 		return ";" not in self.sql
-
-
-def missing_report_available(installed_on):
-	"""Whether the missing report can be run at all.
-
-	Before the first install there is no eligibility boundary, so the honest answer is that the
-	report cannot be produced: not that it is empty, which a reader would take to mean every
-	invoice is complete.
-	"""
-	return bool(installed_on)
 
 
 def required_units_sql():
@@ -384,28 +378,25 @@ def build_register_query(filters, principal, *, permission_conditions):
 	)
 
 
-def build_missing_query(filters, principal, *, installed_on, permission_conditions):
+def build_missing_query(filters, principal, *, permission_conditions):
 	"""The Missing Sales Serials report, as one parameterized statement.
 
 	One row per serial-required invoice item row. Nothing is filtered in Python after the page
 	is taken, so the shortage count the caller reads is the shortage count the database counted.
-	"""
-	if not missing_report_available(installed_on):
-		raise ReportError(
-			CODE_NOT_INSTALLED,
-			"گزارش کسری سریال تا زمانی که تاریخ نصب ماژول ثبت نشده باشد قابل اجرا نیست.",
-		)
 
+	There is no installation-timestamp input, and that is the point: the report covers every
+	invoice the site holds, whatever its age. The only date in the statement is a date range the
+	operator typed.
+	"""
 	conditions = check_permission_conditions(permission_conditions)
 	limit, offset = _page(filters.page_length, filters.offset)
 
-	params = {"installed_on": installed_on, "limit": limit, "offset": offset}
+	params = {"limit": limit, "offset": offset}
 	where = [
 		"sii.parenttype = 'Sales Invoice'",
+		# The requirement rule: only a marked item can be short, so only a marked item is a row.
+		# `core.eligibility` states it; this is where it reaches the statement.
 		"i.sp_serial_required = 1",
-		# The eligibility rule. A row created before the install cannot be judged, so it is
-		# left out rather than guessed at.
-		"si.creation >= %(installed_on)s",
 		_company_condition(principal, params),
 		_equal_condition("si.company", filters.company, "company", params),
 		_equal_condition("si.customer", filters.customer, "customer", params),

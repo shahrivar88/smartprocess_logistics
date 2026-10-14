@@ -6,10 +6,15 @@ fake without a database.
 
 Two entry points, one rewrite
 -----------------------------
-`set_row_serials` rewrites the serials of one invoice row. `confirm_import` rewrites the rows a
-prepared file covers, and wraps that rewrite in a session claim so the file is applied exactly
-once. Both end in the same work — reconcile, delete, find or create serials, insert — so that
-work is written once, in `run_rewrite`, and the session is the only thing layered on top.
+`set_row_serials` rewrites the serials of one invoice row, and `add_row_serials` adds to one
+without replacing anything. Both end in the same work — reconcile, delete, find or create
+serials, insert — so that work is written once, in `run_rewrite`.
+
+A third entry point used to sit beside them: `confirm_import` rewrote the rows a stored preview
+covered, wrapped in a session claim so a file was applied exactly once. Nothing prepared a
+session any more — the window stages what it reads and `add_row_serials` writes it — so the
+endpoint, its claim, and the two plans it needed were removed rather than left reachable as a
+second way into these tables.
 
 Why the lock order is fixed
 ---------------------------
@@ -46,6 +51,7 @@ Retry rules, because a caller has to know them:
 
 from dataclasses import dataclass, field
 
+from smartprocess_logistics.core import authz
 from smartprocess_logistics.core import session as session_rules
 from smartprocess_logistics.core.assignment import derive_assignment_values
 from smartprocess_logistics.core.authz import InvoiceRef, require_invoice_access
@@ -77,7 +83,6 @@ REWRITE_STEPS = (
 	INSERT_ASSIGNMENTS,
 )
 
-CONFIRMATION_STEPS = (LOCK_SESSION, CHECK_SESSION, *REWRITE_STEPS, MARK_APPLIED)
 
 STEP_LOCKS = {
 	LOCK_SESSION: LOCK_ORDER[0],
@@ -88,7 +93,6 @@ STEP_LOCKS = {
 }
 
 REWRITE_ENDPOINT = "set_row_serials"
-CONFIRMATION_ENDPOINT = "confirm_import"
 
 GATEWAY_METHODS = (
 	"open_transaction",
@@ -115,6 +119,35 @@ CODE_PAYLOAD_CHANGED = "PLAN_PAYLOAD_CHANGED"
 CODE_NO_SUBMISSIONS = "PLAN_NOTHING_TO_APPLY"
 CODE_ROW_UNKNOWN = "PLAN_ROW_UNKNOWN"
 CODE_GATEWAY_MISSING = "PLAN_GATEWAY_INCOMPLETE"
+
+# How many serials a refusal names before it stops counting them out.
+NAMED_SERIALS = 10
+
+
+def refusal_message(errors):
+	"""One message for a refused write, naming the serials each issue is about.
+
+	A batch is refused whole, so "one of these twenty is already registered" leaves the operator
+	to guess which one to remove. The validator already recorded the serials of each issue, so
+	they are named here — up to `NAMED_SERIALS`, then a count — because a wall of five hundred
+	names hides the number that matters.
+	"""
+	lines = []
+
+	for issue in errors:
+		named = tuple(issue.serials)
+
+		if not named:
+			lines.append(issue.message)
+			continue
+
+		shown = "، ".join(named[:NAMED_SERIALS])
+		rest = len(named) - NAMED_SERIALS
+		suffix = f" و {rest} مورد دیگر" if rest > 0 else ""
+
+		lines.append(f"{issue.message} ({shown}{suffix})")
+
+	return "; ".join(lines)
 
 
 class OrchestrationError(ValueError):
@@ -147,7 +180,6 @@ class RewritePlan:
 	submissions: tuple
 	delimiters: tuple = ()
 	policy: object = None
-	allow_over_quantity: bool = False
 	only_rows: tuple = ()
 
 	def row_keys(self):
@@ -231,7 +263,6 @@ def build_rewrite_plan(
 	only_rows=(),
 	delimiters=(),
 	policy=None,
-	allow_over_quantity=False,
 ):
 	"""Check what can be checked before a lock is taken, and lay out the rewrite."""
 	if invoice is None or not isinstance(invoice, InvoiceRef):
@@ -261,8 +292,54 @@ def build_rewrite_plan(
 		submissions=submissions,
 		delimiters=tuple(delimiters),
 		policy=policy,
-		allow_over_quantity=allow_over_quantity,
 		only_rows=tuple(only_rows),
+	)
+
+
+def build_append_plan(
+	*,
+	invoice,
+	rows,
+	existing,
+	row_key,
+	serials,
+	principal,
+	policy=None,
+):
+	"""Serials added to one row, keeping everything else that row already holds.
+
+	The difference from `build_rewrite_plan` is one argument, and it is the whole reason a scan
+	station can be safe. `set_row_serials` names the row it rewrites, so the row's stored set is
+	counted out and replaced: two operators registering into the same row at the same time each
+	send the list they believe in, and the later one silently drops the earlier one's serials.
+
+	An append names no replaced row. `replaced_rows` stays empty, nothing the row already holds
+	is deleted, and a serial that is already there is caught by the validator rather than by
+	overwriting it. That is the same shape an import uses, stated for one row — and the serials
+	are added under the invoice lock `run_rewrite` takes, so the two operators' serials both
+	survive.
+
+	One serial and twenty are the same rule, so a batch is the same call with a longer tuple
+	rather than a second function that has to be kept in step with this one. The batch is checked
+	as a whole *and* written as a whole: a list with a duplicate in it is refused entire, and a
+	list that is accepted is inserted in one transaction, so a row cannot end up holding the
+	first half of what an operator asked for.
+
+	The decision lives here rather than in the endpoint because it is a decision: what "add"
+	means for the row's existing registrations is a rule, and a rule in the endpoint is a rule
+	no test can reach.
+	"""
+	serials = tuple(serials)
+
+	return build_rewrite_plan(
+		invoice=invoice,
+		rows=rows,
+		existing=existing,
+		submissions=tuple((row_key, serial) for serial in serials),
+		principal=principal,
+		only_rows=(),
+		delimiters=(),
+		policy=policy,
 	)
 
 
@@ -276,27 +353,6 @@ def payload_hash(payload):
 	import hashlib
 
 	return hashlib.sha256(payload.encode()).hexdigest()
-
-
-def build_confirmation_plan(*, session, rewrite, owner, payload_hash, now=None):
-	"""Wrap a rewrite plan in the session claim that makes it single-use.
-
-	`owner` is the acting user and `payload_hash` is the hash of the payload that was just read
-	back, so both checks compare the caller's claim against the session rather than the session
-	against itself.
-	"""
-	steps = tuple(Step(kind) for kind in CONFIRMATION_STEPS)
-	check_lock_order(steps)
-
-	return ConfirmationPlan(
-		rewrite=rewrite,
-		steps=steps,
-		session_name=session.name,
-		token=session.token,
-		payload_hash=payload_hash,
-		owner=owner,
-		now=now,
-	)
 
 
 def _require(gateway, names):
@@ -323,14 +379,31 @@ def run_rewrite(plan, gateway):
 	if getattr(locked, "company", None) != plan.company:
 		raise OrchestrationError(CODE_COMPANY_CHANGED, "شرکت فاکتور تغییر کرده است.")
 
+	# The lifecycle, read under the same lock and for the same reason the company is: the check
+	# the endpoint made was against the invoice as it was a moment ago, and an invoice cancelled
+	# in between must not receive a registration. `docstatus` comes off the locked read, so this
+	# is the site's answer now rather than the answer the request arrived with.
+	if getattr(locked, "docstatus", 0) == authz.DOCSTATUS_CANCELLED:
+		raise OrchestrationError(CODE_INVOICE_CHANGED, authz.REFUSAL_INVOICE_CANCELLED)
+
 	# The rows are read again, under the lock. The preview's copy is not trusted, because the
 	# invoice may have been edited between the preview and the write.
 	rows = tuple(gateway.read_rows(plan.invoice_name))
-	existing = tuple(gateway.read_existing(plan.invoice_name))
 
 	_verify_rows_unchanged(plan, rows)
 
 	gateway.lock_serials(tuple(sorted({row.item_code for row in rows})))
+
+	# The stored assignments are read here, after the invoice and the serials are locked, and as a
+	# **locking** read — because this is the count the capacity rule decides on, and the rule has
+	# to be decided on what the invoice holds now. A plain read here is a consistent read, and
+	# under `REPEATABLE-READ` that answers with the view this transaction had when it first
+	# looked, which is how a caller that read a full row's third place, waited, and then wrote was
+	# measured **passing** the cap and being stopped only by an unrelated deadlock afterwards
+	# (`deployment/lab/verify_scan_station.py`, the `stale_round` check). The lock order above is
+	# the plan's own — invoice, serial, assignment — so reading it here takes no new lock out of
+	# turn.
+	existing = tuple(gateway.read_existing(plan.invoice_name, for_update=True))
 
 	# The rows whose whole set is written again, and therefore the rows whose stored assignments
 	# the validator must count out: the ones a caller named as replaced. `set_row_serials` names
@@ -348,7 +421,6 @@ def run_rewrite(plan, gateway):
 		replaced_rows=rewrite_rows,
 		delimiters=plan.delimiters,
 		policy=plan.policy,
-		allow_over_quantity=plan.allow_over_quantity,
 	)
 
 	if not result.is_valid:
@@ -361,7 +433,7 @@ def run_rewrite(plan, gateway):
 		# the message still lists all of them.
 		raise OrchestrationError(
 			errors[0].code if errors else CODE_PAYLOAD_CHANGED,
-			"; ".join(issue.message for issue in errors),
+			refusal_message(errors),
 		)
 
 	deleted = 0
@@ -438,41 +510,6 @@ def _verify_rows_unchanged(plan, rows):
 		)
 
 	return True
-
-
-def run_confirmation(plan, gateway):
-	"""Execute a confirmation: claim the session, then rewrite, in one transaction."""
-	_require(gateway, CONFIRMATION_GATEWAY_METHODS)
-	gateway.open_transaction()
-
-	stored = gateway.lock_session(plan.token)
-
-	# The claim is checked here and **not written**. It happens under the session row lock, so
-	# a concurrent request is blocked until this transaction ends and then reads what it
-	# committed: `Applied` if this one succeeded, `Prepared` if it rolled back. Writing a
-	# `Claimed` row would need a second transaction to survive, and a transaction this app does
-	# not open. That is exactly why the lifecycle says a stored `Claimed` row is never produced.
-	claimed = session_rules.claim(
-		stored,
-		user=plan.owner,
-		payload_hash=plan.payload_hash,
-		now=plan.now,
-	)
-
-	outcome = run_rewrite(plan.rewrite, gateway)
-
-	applied = session_rules.apply(claimed, now=plan.now, summary=outcome.summary)
-	gateway.mark_session_applied(applied.name, applied.applied_at, applied.result_summary)
-
-	return WriteOutcome(
-		accepted=outcome.accepted,
-		deleted=outcome.deleted,
-		created_serials=outcome.created_serials,
-		serials_reused=outcome.serials_reused,
-		rewrite_rows=outcome.rewrite_rows,
-		summary=outcome.summary,
-		steps=plan.kinds(),
-	)
 
 
 def is_retryable(error):

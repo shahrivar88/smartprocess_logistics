@@ -13,7 +13,8 @@ The modules and what each one decides:
   tokens.
 - `markers`: the `{n}` item markers that say which invoice row a group of serials belongs to.
 - `quantities`: how many labels a row needs, and how many it is short of or over.
-- `eligibility`: which invoices the missing-serial report may cover.
+- `eligibility`: whether a serial is required for a row — an item's flag decides, and no
+  invoice date and no installation timestamp is consulted.
 - `validation`: everything above combined into one registration plan, plus the checks that
   keep a configuration from being ambiguous.
 - `limits`: which of an operator's ceilings apply to a payload, and the rule that one may only

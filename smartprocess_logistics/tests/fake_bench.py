@@ -32,6 +32,7 @@ import traceback
 import types
 from datetime import datetime
 
+from smartprocess_logistics.core.defaults import DEFAULT_NEXT_ROW_COMMAND
 from smartprocess_logistics.core.normalization import NORMALIZATION_VERSION
 
 SETTINGS = "Logistics Settings"
@@ -67,10 +68,18 @@ class SettingsDoc:
 		delimiters=None,
 		item_markers=None,
 		normalization_version=NORMALIZATION_VERSION,
+		next_row_command=None,
 	):
 		self._installed_on = installed_on
 		self.delimiters = [dict(row) for row in (delimiters or [])]
 		self.item_markers = [dict(row) for row in (item_markers or [])]
+		# The scan window's next-column command, and the same reasoning as the version above: the
+		# shipped default is what a bench models, because that is what a row carries once the
+		# column exists — Frappe inserts a Single from the DocType's defaults, and the migrate
+		# that adds the column is followed by the seed that fills it. `next_row_command=None` is
+		# the one other state: a settings row that predates the column, which is what the migrate
+		# actually meets and what the seed exists for.
+		self.next_row_command = DEFAULT_NEXT_ROW_COMMAND if next_row_command is None else next_row_command
 		# The shipped default, not a placeholder: `Logistics Settings.normalization_version`
 		# defaults to the code's own rule set, and `schema_checks` refuses a definition where the
 		# two disagree. So a bench built here models a site that is up to date, which is what
@@ -117,6 +126,7 @@ class SettingsDoc:
 			"delimiters": [dict(row) for row in self.delimiters],
 			"item_markers": [dict(row) for row in self.item_markers],
 			"normalization_version": self.normalization_version,
+			"next_row_command": self.next_row_command,
 		}
 
 	def _roll_back(self):
@@ -125,6 +135,7 @@ class SettingsDoc:
 		self.delimiters = [dict(row) for row in self.persisted["delimiters"]]
 		self.item_markers = [dict(row) for row in self.persisted["item_markers"]]
 		self.normalization_version = self.persisted["normalization_version"]
+		self.next_row_command = self.persisted["next_row_command"]
 
 	def as_dict(self):
 		return {
@@ -486,6 +497,120 @@ class FakeLifecycle:
 			rollback=bench.rollback,
 		)
 		frappe.db = bench._db
+
+		return frappe
+
+
+class FakeReadRuntime(FakeLifecycle):
+	"""A second fake runtime, for the reads `api/gateway.py` makes.
+
+	`FakeLifecycle` forbids `frappe.get_all` outright, and it is right to: nothing in the lifecycle
+	or setup modules may use an API that skips permission checks. The gateway's exporting and
+	planning reads do use it, and for a reason that survives this stage — `Logistics Serial` has no
+	company column, so no permission condition a framework could apply would restrict it, and the
+	app's own company policy has to be visible in the filters the gateway passes.
+
+	That is what this runtime exists to record. `get_all_calls` is the evidence, and the rows a test
+	plants are what comes back, so a test asserts on the data an export would hand an operator
+	rather than on the source text that produced it.
+
+	`frappe.permissions` is injected as a module of its own because the gateway imports
+	`get_user_permissions` from it by name. The two ways a principal can be restricted — the user's
+	`Company` user permissions, and the site's strict setting — are fields on this object, so a test
+	states a site's policy instead of reading one from a database that is not there.
+	"""
+
+	MODULES = FakeLifecycle.MODULES + (
+		"frappe.permissions",
+		"smartprocess_logistics.api",
+		"smartprocess_logistics.api.gateway",
+		"smartprocess_logistics.permissions",
+	)
+
+	def __init__(self, bench=None):
+		super().__init__(bench)
+		self.get_all_calls = []
+		self.user = "Administrator"
+		self.roles = ("System Manager",)
+		# user -> the companies their `Company` user permissions allow. A user absent from this
+		# mapping has no such permission, which is `None` — every company — and not "none".
+		self.company_permissions = {}
+		self.strict_companies = False
+
+	# --- what the gateway calls ----------------------------------------------------------
+
+	def get_all(self, doctype, **kwargs):
+		self.get_all_calls.append({"doctype": doctype, **kwargs})
+
+		if doctype not in self.bench.doctypes:
+			raise AssertionError(f"the fake does not have a table for {doctype!r}")
+
+		rows = [dict(row) for row in self.bench.tables.get(doctype, [])]
+		filters = kwargs.get("filters")
+
+		if filters:
+			rows = [row for row in rows if self.bench._matches(row, filters)]
+
+		fields = kwargs.get("fields")
+
+		if fields:
+			rows = [{field: row.get(field) for field in fields} for row in rows]
+
+		order_by = kwargs.get("order_by") or ""
+
+		if order_by.endswith(" asc"):
+			column = order_by[:-4].strip()
+			rows.sort(key=lambda row: row.get(column) or "")
+
+		return rows
+
+	def get_roles(self, user):
+		return list(self.roles)
+
+	def get_user_permissions(self, user):
+		"""`frappe.permissions.get_user_permissions`'s shape: a doctype -> rows mapping."""
+		if user not in self.company_permissions:
+			return {}
+
+		return {"Company": [{"doc": company} for company in self.company_permissions[user]]}
+
+	def get_single_value(self, doctype, field):
+		if field == "apply_strict_user_permissions":
+			return self.strict_companies
+
+		return None
+
+	def escape(self, value):
+		"""Enough of `frappe.db.escape` to state a condition: quotes doubled, then wrapped."""
+		return "'" + str(value).replace("'", "''") + "'"
+
+	def calls_to(self, doctype):
+		"""Every recorded read of one DocType, in order."""
+		return [call for call in self.get_all_calls if call["doctype"] == doctype]
+
+	# --- the fake module -----------------------------------------------------------------
+
+	def _build(self):
+		frappe = super()._build()
+
+		frappe.get_all = self.get_all
+		frappe.get_roles = self.get_roles
+		frappe.session = types.SimpleNamespace(user=self.user)
+		frappe.flags = types.SimpleNamespace(in_import=False)
+		frappe.PermissionError = PermissionError
+		frappe.db.escape = self.escape
+		frappe.db.get_single_value = self.get_single_value
+
+		permissions = types.ModuleType("frappe.permissions")
+		permissions.get_user_permissions = self.get_user_permissions
+
+		# `api/gateway.py` imports both submodules **by name** (`from frappe.utils import now`,
+		# `from frappe.permissions import get_user_permissions`), and a from-import of `a.b` needs
+		# `a.b` in `sys.modules` or `a` to be a package. The lifecycle modules reach their helpers
+		# through the attribute instead, which is why the base runtime gets away with neither.
+		frappe.__path__ = []
+		sys.modules["frappe.utils"] = frappe.utils
+		sys.modules["frappe.permissions"] = permissions
 
 		return frappe
 

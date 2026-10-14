@@ -1,8 +1,9 @@
 """Hook configuration for smartprocess_logistics.
 
 Everything this app registers is here: two lifecycle hooks (`after_install`, `after_migrate`),
-the cleanup that runs after a removal, one scheduled job, the two Desk assets and the two form
-scripts. Each is idempotent and none calls `ignore_permissions`. What is deliberately **absent** — `doc_events`,
+the cleanup that runs after a removal, one scheduled job, the two Desk assets, the two form
+scripts and the two company conditions the framework's own list queries use. Each is idempotent
+and none calls `ignore_permissions`. What is deliberately **absent** — `doc_events`,
 `override_doctype_class`, `override_whitelisted_methods`, monkey patching — is listed at the
 bottom of this file with the reason.
 """
@@ -27,12 +28,37 @@ required_apps = ["frappe", "erpnext"]
 app_include_css = ["/assets/smartprocess_logistics/css/logistics.css"]
 
 doctype_js = {
-	"Sales Invoice": "public/js/sales_invoice_serial_button.js",
+	# Both are inlined into the Sales Invoice form meta, in this order, and Frappe accepts a list
+	# here: `desk/form/meta.py::get_code_files_via_hooks` wraps a single path in a list and then
+	# reads each one. They are two files because they are two acts — registering the labels in an
+	# operator's hand, and moving the serials of a cancelled invoice onto the one that replaced it —
+	# and the second is a review of two documents rather than a scan session.
+	"Sales Invoice": [
+		"public/js/sales_invoice_serial_button.js",
+		"public/js/sales_invoice_serial_transfer.js",
+	],
 	# The two buttons that export this app's records and import them back. They live on the
 	# Settings single because that is where an administrator looks for them, and they are the
 	# only supported way to carry the history across a removal — a full site backup protects the
 	# site, this protects the records when the app itself goes away.
 	"Logistics Settings": "public/js/logistics_settings_transfer.js",
+}
+
+
+# --- The framework's own queries ---------------------------------------------------------
+#
+# `Logistics Serial` has no company column — a serial belongs to a company only through the
+# assignments that name it — so Frappe's own user-permission filtering cannot restrict it, and a
+# list of every company's serials would otherwise be available to anybody holding the role. These
+# conditions are how the queries the framework builds itself (`frappe.client.get_list`, the Desk
+# list, a report written with `get_list`) carry the same company policy the endpoints apply:
+# `smartprocess_logistics/permissions.py` explains both the rule and its limits.
+#
+# `frappe.get_all` skips permission conditions entirely, which is why `api/gateway.py` applies the
+# policy itself as well; the two paths share one decision (`core.authz`).
+permission_query_conditions = {
+	"Logistics Serial": "smartprocess_logistics.permissions.serial_query_conditions",
+	"Logistics Serial Assignment": ("smartprocess_logistics.permissions.assignment_query_conditions"),
 }
 
 
@@ -77,13 +103,13 @@ after_uninstall = "smartprocess_logistics.install.after_uninstall"
 
 # --- Implemented, deliberately not registered -------------------------------------------
 #
-# Nothing, and one thing is deliberately **not implemented**: there is no automatic preservation
-# hook. An uninstall is a deliberate act, and the records are protected by an act that is equally
+# One thing is deliberately **not implemented**: there is no automatic preservation hook. An
+# uninstall is a deliberate act, and the records are protected by an act that is equally
 # deliberate — an export and a backup taken first. See `README.md` for the order.
 #
-# Phase 4 — Desk user interface:
-#     doctype_js = {"Sales Invoice": "public/js/sales_invoice_serial_button.js"}
-#     app_include_css = ["/assets/smartprocess_logistics/css/logistics.css"]
+# The Desk user interface used to be listed here as not registered, and it is registered: see
+# `doctype_js` and `app_include_css` above. The two lines that said otherwise were left behind when
+# it was wired up, and a comment that contradicts the file it is in is worse than no comment.
 
 # --- Never registered by this app ------------------------------------------------------
 #

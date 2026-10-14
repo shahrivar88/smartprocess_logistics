@@ -11,8 +11,10 @@ from smartprocess_logistics.core.delimiters import MAX_TOKENS
 from smartprocess_logistics.core.limits import (
 	DEFAULT_PAGE_LENGTH,
 	KILOBYTE,
+	MAX_INVOICE_ASSIGNMENTS,
 	MAX_PAGE_LENGTH,
 	payload_limits,
+	status_read_is_capped,
 )
 from smartprocess_logistics.core.spreadsheet import SheetLimits
 from smartprocess_logistics.core.textfile import MAX_TEXT_BYTES
@@ -104,3 +106,24 @@ class TestPageLimits(UnitTestCase):
 		limits = payload_limits(max_page=100_000)
 
 		self.assertEqual(limits.max_page_length, MAX_PAGE_LENGTH)
+
+
+class TestTheStatusReadIsBounded(UnitTestCase):
+	"""One status read loads a bounded number of registrations, or refuses.
+
+	Every count in that payload is a count of what was read, so a page that was cut short would be
+	reported as an invoice smaller than it is. The bound is therefore a refusal, not a truncation.
+	"""
+
+	def test_a_read_under_the_bound_is_not_capped(self):
+		for count in (0, 1, 33, MAX_INVOICE_ASSIGNMENTS - 1):
+			with self.subTest(count=count):
+				self.assertFalse(status_read_is_capped(count))
+
+	def test_a_read_that_fills_the_page_is_capped(self):
+		"""Exactly the page size cannot be told from a page that was cut short, so it is capped."""
+		self.assertTrue(status_read_is_capped(MAX_INVOICE_ASSIGNMENTS))
+		self.assertTrue(status_read_is_capped(MAX_INVOICE_ASSIGNMENTS + 1))
+
+	def test_the_bound_is_above_any_invoice_this_app_has_measured(self):
+		self.assertGreater(MAX_INVOICE_ASSIGNMENTS, 40)

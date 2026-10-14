@@ -5,7 +5,7 @@
  "document_type": "Setup",
  "engine": "InnoDB",
  "field_order": [
-  "general_tab",
+  "serial_tab",
   "status_section",
   "enable_serial_registration",
   "status_column",
@@ -14,6 +14,11 @@
   "serial_max_length",
   "serial_column",
   "normalization_version",
+  "scan_section",
+  "next_row_command",
+  "parsing_section",
+  "delimiters",
+  "item_markers",
   "import_tab",
   "limit_section",
   "max_import_rows",
@@ -23,10 +28,6 @@
   "preview_ttl_minutes",
   "policy_section",
   "policy_column",
-  "allow_over_quantity",
-  "parsing_section",
-  "delimiters",
-  "item_markers",
   "report_tab",
   "report_section",
   "default_page_length",
@@ -35,9 +36,9 @@
  ],
  "fields": [
   {
-   "fieldname": "general_tab",
+   "fieldname": "serial_tab",
    "fieldtype": "Tab Break",
-   "label": "عمومی"
+   "label": "تنظیمات سریال"
   },
   {
    "fieldname": "status_section",
@@ -56,7 +57,7 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "زمان دقیق نصب ماژول. هنگام نصب یک‌بار نوشته می‌شود و برنامه پس از آن بازنویسی‌اش نمی‌کند؛ نه نصب دوباره و نه migrate آن را تغییر نمی‌دهد. مبنای واجدشرایط‌بودن فاکتور در گزارش «کسری سریال» است: فقط فاکتورهایی که Sales Invoice.creation آن‌ها بزرگ‌تر یا مساوی این مقدار باشد در گزارش می‌آیند. فاکتورهای قدیمی‌تر حتی اگر بعداً ثبت شوند کنار گذاشته می‌شوند، ولی ثبت دستی سریال روی آن‌ها همچنان ممکن است.",
+   "description": "زمان دقیق نصب ماژول. هنگام نصب یک‌بار نوشته می‌شود و برنامه پس از آن بازنویسی‌اش نمی‌کند؛ نه نصب دوباره و نه migrate آن را تغییر نمی‌دهد. تنها کاری که با آن می‌کند این است که بفهمد نصب کامل شده، تا نصب نیمه‌تمام در اجرای بعدی کامل شود. مبنای هیچ گزارشی نیست: گزارش «کسری سریال» همهٔ فاکتورهای سایت را می‌سنجد و تاریخ بزرگ‌تر یا کوچک‌تر از این مقدار هیچ فاکتوری را وارد یا خارج نمی‌کند.",
    "fieldname": "installed_on",
    "fieldtype": "Datetime",
    "label": "تاریخ نصب ماژول",
@@ -65,7 +66,7 @@
   {
    "fieldname": "serial_section",
    "fieldtype": "Section Break",
-   "label": "سریال"
+   "label": "سیاست سریال"
   },
   {
    "default": "60",
@@ -87,6 +88,36 @@
    "label": "نسخهٔ سیاست نرمال‌سازی",
    "non_negative": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "scan_section",
+   "fieldtype": "Section Break",
+   "label": "اسکن"
+  },
+  {
+   "default": "**",
+   "description": "اگر اسکنر دقیقاً همین مقدار را بفرستد، به‌جای ثبت سریال، مکان‌نما به ستون ردیف بعدی می‌رود. مقایسه فقط برابری کامل مقدار اسکن‌شده با این مقدار است؛ اگر این متن داخل یک سریال بیاید، آن سریال مثل هر سریال دیگری ثبت می‌شود. پس از آخرین ستون، نوبت به ستون اول برمی‌گردد. این مقدار هرگز به‌عنوان سریال ذخیره نمی‌شود و به سرور فرستاده نمی‌شود. برای اینکه این رفتار عملاً کنار گذاشته شود، مقداری بگذارید که اسکنر هرگز نمی‌فرستد؛ خالی‌گذاشتن آن پذیرفته نمی‌شود.",
+   "fieldname": "next_row_command",
+   "fieldtype": "Data",
+   "label": "کاراکتر ردیف بعدی",
+   "reqd": 1
+  },
+  {
+   "fieldname": "parsing_section",
+   "fieldtype": "Section Break",
+   "label": "جداکننده‌ها و نشانگرها"
+  },
+  {
+   "fieldname": "delimiters",
+   "fieldtype": "Table",
+   "label": "جداکننده‌های فعال",
+   "options": "Logistics Import Delimiter"
+  },
+  {
+   "fieldname": "item_markers",
+   "fieldtype": "Table",
+   "label": "الگوهای نشانگر کالا",
+   "options": "Logistics Item Marker"
   },
   {
    "fieldname": "import_tab",
@@ -144,30 +175,6 @@
    "fieldtype": "Column Break"
   },
   {
-   "default": "0",
-   "description": "وقتی خاموش است، ثبت سریالِ بیشتر از تعداد ردیف فاکتور رد می‌شود. روشن‌کردن آن فقط جلوی رد شدن را می‌گیرد و هشدار را نگه می‌دارد؛ در این حالت ردیف در گزارش کسری با مازاد منفی نمایش داده می‌شود.",
-   "fieldname": "allow_over_quantity",
-   "fieldtype": "Check",
-   "label": "اجازهٔ ثبت بیش از تعداد فاکتور"
-  },
-  {
-   "fieldname": "parsing_section",
-   "fieldtype": "Section Break",
-   "label": "جداکننده‌ها و نشانگرها"
-  },
-  {
-   "fieldname": "delimiters",
-   "fieldtype": "Table",
-   "label": "جداکننده‌های فعال",
-   "options": "Logistics Import Delimiter"
-  },
-  {
-   "fieldname": "item_markers",
-   "fieldtype": "Table",
-   "label": "الگوهای نشانگر کالا",
-   "options": "Logistics Item Marker"
-  },
-  {
    "fieldname": "report_tab",
    "fieldtype": "Tab Break",
    "label": "گزارش"
@@ -199,7 +206,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-12 18:30:00.000000",
+ "modified": "2026-10-13 16:00:00.000000",
  "modified_by": "Administrator",
  "module": "SmartProcess Logistics",
  "name": "Logistics Settings",

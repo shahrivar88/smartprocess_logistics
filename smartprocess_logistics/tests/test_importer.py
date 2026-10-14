@@ -29,7 +29,6 @@ from smartprocess_logistics.core.spreadsheet import build_sheet_rows
 from smartprocess_logistics.core.validation import (
 	CODE_DUPLICATE_IN_INVOICE,
 	CODE_EXCESS_QUANTITY,
-	CODE_UNKNOWN_ROW,
 	ExistingAssignment,
 	InvoiceRow,
 )
@@ -37,8 +36,8 @@ from smartprocess_logistics.tests.base import UnitTestCase
 
 PATTERNS = ("{n}*", "*{n}", "{n}#", "#{n}")
 
-ROW_1 = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=3)
-ROW_2 = InvoiceRow(row_key="row-2", item_code="ITEM-2", invoiced_qty=2)
+ROW_1 = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=3, serial_required=True)
+ROW_2 = InvoiceRow(row_key="row-2", item_code="ITEM-2", invoiced_qty=2, serial_required=True)
 ROWS = (ROW_1, ROW_2)
 
 

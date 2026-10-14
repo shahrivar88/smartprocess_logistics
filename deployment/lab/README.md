@@ -10,6 +10,17 @@
 | `.env.lab` (gitignore) | مسیر ریپو، رمز دورریز MariaDB، و رمز admin سایت آزمایشگاه |
 | `cleanup_incomplete_site.sh` | حذف **فقط** پوشهٔ سایت نیم‌ساخته، با گاردهای پیش از حذف |
 | `verify_isolation_cycle.py` | تأیید خودکار هر فاز؛ فقط داخل کانتینر `backend` اجرا می‌شود |
+| `.env.example` | سه متغیر لازم با جای‌نگهدار؛ کپی‌اش کنید به `.env.lab` (که در git نیست) |
+| `verify_lab_read_only.py` | همهٔ مسیرهای **خواندنی** روی سایت آزمایشگاه، با شمارش چهار جدول پیش و پس — برای وقتی که نوشتن ممنوع است |
+| `verify_lab_transfer.py` | فازهای ۳ و ۴ برنامهٔ تست: سند حسابرسی ثبت‌شده و انتقال سریال روی اصلاحیه |
+| `verify_lab_concurrency.py` | فاز ۵: دو فرآیند هم‌زمان روی یک فاکتور مقصد |
+| `verify_lab_authorization.py` | فاز ۲: نقش‌ها، دروازهٔ نقش Archivist و محدودیت شرکت |
+| `verify_lab_restore_history.py` | فاز ۶: بازآوری تاریخی در برابر بازآوری معمولی |
+| `verify_lab_restore_records.py` | فاز ۸: جای‌گذاری سابقه‌های حسابرسی و ردهای آن |
+
+این پنج اسکریپت با `run` داخل کانتینر `backend` اجرا می‌شوند و هر کدام با `PASS` تمام می‌شوند؛
+`run` = `arm` + `check` + `disarm`، و `disarm` هیچ‌چیز را حذف نمی‌کند (سند ثبت‌شده و سابقهٔ
+حسابرسی حذف‌شدنی نیستند). هر `check` تازه به یک `arm` تازه نیاز دارد.
 
 پورت وب: `127.0.0.1:8095` · دیتابیس منتشر نشده · نام سایت: `sp_logistics_lab` · volumeها:
 `sp_logistics_lab_*` (همه دورریز).
@@ -27,13 +38,13 @@ stdin بسته منتظر ماندند و کار نیمه‌تمام رها شد
 ### ۱) ساخت سایت
 
 ```powershell
-cd C:\Users\shahr\smartprocess_logistics; $root = ((Get-Content .\deployment\lab\.env.lab | Select-String '^LAB_DB_ROOT_PASSWORD=') -replace '^LAB_DB_ROOT_PASSWORD=', ''); $admin = ((Get-Content .\deployment\lab\.env.lab | Select-String '^LAB_SITE_ADMIN_PASSWORD=') -replace '^LAB_SITE_ADMIN_PASSWORD=', ''); docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml run --rm backend bench new-site sp_logistics_lab --mariadb-root-password $root --admin-password $admin
+cd <repo-root>; $root = ((Get-Content .\deployment\lab\.env.lab | Select-String '^LAB_DB_ROOT_PASSWORD=') -replace '^LAB_DB_ROOT_PASSWORD=', ''); $admin = ((Get-Content .\deployment\lab\.env.lab | Select-String '^LAB_SITE_ADMIN_PASSWORD=') -replace '^LAB_SITE_ADMIN_PASSWORD=', ''); docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml run --rm backend bench new-site sp_logistics_lab --mariadb-root-password $root --admin-password $admin
 ```
 
 ### ۲) نصب مجدد app (پس از حذف، در چرخه)
 
 ```powershell
-cd C:\Users\shahr\smartprocess_logistics; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec backend bench --site sp_logistics_lab install-app smartprocess_logistics
+cd <repo-root>; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec backend bench --site sp_logistics_lab install-app smartprocess_logistics
 ```
 
 ### ۳) حذف app — فقط روی `sp_logistics_lab`
@@ -42,7 +53,7 @@ cd C:\Users\shahr\smartprocess_logistics; docker compose -p sp-logistics-isolati
 `export` گرفته می‌شود.
 
 ```powershell
-cd C:\Users\shahr\smartprocess_logistics; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec backend bench --site sp_logistics_lab uninstall-app smartprocess_logistics
+cd <repo-root>; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec backend bench --site sp_logistics_lab uninstall-app smartprocess_logistics
 ```
 
 پرسش تأیید را `y` بزنید. `--no-backup` را استفاده **نکنید** (می‌خواهیم رفتار پیش‌فرض سنجیده شود).
@@ -52,7 +63,7 @@ cd C:\Users\shahr\smartprocess_logistics; docker compose -p sp-logistics-isolati
 اسکریپت گارددار (خودش بررسی می‌کند که سایت داده‌ای ندارد و فقط همان یک مسیر را حذف می‌کند):
 
 ```powershell
-cd C:\Users\shahr\smartprocess_logistics; docker run --rm -e SP_LAB_CONFIRM=sp_logistics_lab -v sp_logistics_lab_sites:/sites -v "${PWD}/deployment/lab:/lab:ro" alpine sh /lab/cleanup_incomplete_site.sh sp_logistics_lab
+cd <repo-root>; docker run --rm -e SP_LAB_CONFIRM=sp_logistics_lab -v sp_logistics_lab_sites:/sites -v "${PWD}/deployment/lab:/lab:ro" alpine sh /lab/cleanup_incomplete_site.sh sp_logistics_lab
 ```
 
 ---
@@ -62,15 +73,15 @@ cd C:\Users\shahr\smartprocess_logistics; docker run --rm -e SP_LAB_CONFIRM=sp_l
 بعد از ساخت سایت، این سه بررسی ملاک شروع است:
 
 ```powershell
-cd C:\Users\shahr\smartprocess_logistics; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec backend bench --site sp_logistics_lab list-apps
+cd <repo-root>; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec backend bench --site sp_logistics_lab list-apps
 ```
 
 ```powershell
-cd C:\Users\shahr\smartprocess_logistics; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec db sh -c "mariadb -uroot -p`$MARIADB_ROOT_PASSWORD -N -e 'show databases; select user, host from mysql.user;'"
+cd <repo-root>; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec db sh -c "mariadb -uroot -p`$MARIADB_ROOT_PASSWORD -N -e 'show databases; select user, host from mysql.user;'"
 ```
 
 ```powershell
-cd C:\Users\shahr\smartprocess_logistics; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec backend sh -c "grep -o '\"db_name\": \"[^\"]*\"' sites/sp_logistics_lab/site_config.json"
+cd <repo-root>; docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab -f deployment/lab/compose.isolation-lab.yaml exec backend sh -c "grep -o '\"db_name\": \"[^\"]*\"' sites/sp_logistics_lab/site_config.json"
 ```
 
 معیارها: `list-apps` باید `frappe` (و بعد از نصب، `erpnext`) را نشان دهد بدون خطا؛ نام دیتابیس
@@ -135,7 +146,7 @@ docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab 
 
 | # | کار | انتظار |
 | - | --- | ------ |
-| 1 | `Logistics Settings` را باز کنید | دو دکمهٔ «خروجی کامل اطلاعات سریال‌ها» و «بازیابی اطلاعات سریال‌ها» دیده شود |
+| 1 | `Logistics Settings` را باز کنید | دو دکمهٔ «خروجی کامل اطلاعات سریال‌ها» و «بازیابی اطلاعات سریال‌ها» دیده شود. اگر کاربر نقش `Logistics Serial Archivist` هم داشته باشد، **چهار** دکمه دیده می‌شود: «بازآوری تاریخچهٔ فاکتورهای لغو‌شده» و «بازآوری سابقه‌های انتقال» |
 | 2 | «خروجی کامل اطلاعات سریال‌ها» | دانلود یک فایل JSON با نام سایت، و پیام سبز با شمارش سریال/ردیف |
 | 3 | در فایل دانلودشده | `format`, `format_version`, `digest`, `counts`, و ردیف‌ها با `sales_invoice`/`sales_invoice_item`/`company` |
 | 4 | فایل را در ویرایشگر متن تغییر دهید و «بازیابی اطلاعات سریال‌ها» را با آن امتحان کنید | پیام خطای «اثر انگشت» و **هیچ** نوشتنی |
@@ -144,6 +155,10 @@ docker compose -p sp-logistics-isolation-lab --env-file deployment/lab/.env.lab 
 | 7 | «ثبت کن» | پیام گزارش با شمارش ثبت‌شده/رد‌شده/قابل‌ثبت‌نبودن |
 | 8 | همان فایل را دوباره وارد کنید | همه «قبلاً موجود»، ثبت‌شده = صفر |
 | 9 | پس از چرخهٔ حذف/نصب/بازیابی: فاکتورهای `SP-LAB` را باز کنید و دکمهٔ «سریال‌ها» را بزنید | همان سریال‌ها روی همان ردیف‌ها، با همان متن اصلی |
+| 10 | «بازآوری تاریخچهٔ فاکتورهای لغو‌شده» را با همان فایل بزنید | پیش‌نمایش با یک **هشدار** در بالا: این عمل روی فاکتورهای لغو‌شده می‌نویسد. دکمهٔ تأییدش «بازآوری کن» است، نه «ثبت کن» |
+| 11 | در آن پیش‌نمایش، ردیف‌های فاکتور زنده | با دلیل «روی فاکتور لغو‌شده نیست؛ با بازآوری معمولی ثبت می‌شود» گزارش می‌شوند و ثبت **نمی‌شوند** |
+| 12 | در فایل خروجی نسخهٔ ۲، بخش `transfers` | در پیش‌نمایش دو بازآوریِ *ثبت*، خطی می‌گوید چند سابقه در فایل هست و بازآوری **نمی‌شود**؛ در پیش‌نمایش «بازآوری سابقه‌های انتقال» همان خط می‌گوید چند تا **بازآوری می‌شود** |
+| 13 | «بازآوری سابقه‌های انتقال» با فایل فاز ۳ | پیش‌نمایش با هشدار خودش و دکمهٔ «بازآوری کن»؛ پس از تأیید، سابقه‌ها با `restored_from` نام همین سایت مبدأ و `restored_by` کاربر جاری ساخته می‌شوند |
 
 ## پاک‌کردن محیط آزمایشگاه
 

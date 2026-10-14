@@ -29,14 +29,79 @@ frappe.ui.form.on("Logistics Settings", {
 		}
 
 		frm.add_custom_button(__("خروجی کامل اطلاعات سریال‌ها"), () => export_everything(frm));
-		frm.add_custom_button(__("بازیابی اطلاعات سریال‌ها"), () => restore_everything(frm));
+		frm.add_custom_button(__("بازیابی اطلاعات سریال‌ها"), () => restore_everything(frm, "live"));
+
+		// The second restore, and a separate button on purpose. It writes to cancelled invoices —
+		// the one thing every other write in this app refuses (I22) — so it is not a mode the
+		// ordinary button falls into: an operator who means the ordinary restore must not be one
+		// click from the historical one, and the archivist who means this must be able to find it.
+		if (is_archivist()) {
+			frm.add_custom_button(__("بازآوری تاریخچهٔ فاکتورهای لغو‌شده"), () =>
+				restore_everything(frm, "history")
+			);
+			frm.add_custom_button(__("بازآوری سابقه‌های انتقال"), () =>
+				restore_everything(frm, "records")
+			);
+		}
 	},
 });
+
+// The two restores, and the whole of what differs between them. Everything else — the file
+// chooser, the preview, the confirmation, the reporting — is one flow, because it is one act from
+// the operator's side and a second copy of it would be a second place for the warnings to drift.
+const RESTORES = {
+	live: {
+		title: __("بازیابی سریال‌ها"),
+		preview_endpoint: "preview_serial_restore",
+		apply_endpoint: "apply_serial_restore",
+		confirm_label: __("ثبت کن"),
+		warning: "",
+	},
+	records: {
+		title: __("بازآوری سابقه‌های انتقال"),
+		preview_endpoint: "preview_restore_audit_records",
+		apply_endpoint: "restore_audit_records",
+		confirm_label: __("بازآوری کن"),
+		// A different warning for a different act: this one writes documents that *record* acts
+		// performed on another site, which is why each one says so on its own face.
+		warning: __(
+			"هشدار: این عمل سابقه‌های انتقال را از آرشیو می‌سازد. هر سابقه‌ای که از این‌جا ساخته شود، خودش را بازآوری‌شده معرفی می‌کند و هرگز روی سابقه‌ای با همان نام بازنویسی نمی‌شود."
+		),
+	},
+	history: {
+		title: __("بازآوری تاریخچهٔ فاکتورهای لغو‌شده"),
+		preview_endpoint: "preview_cancelled_serial_history",
+		apply_endpoint: "restore_cancelled_serial_history",
+		confirm_label: __("بازآوری کن"),
+		// Shown at the top of the preview and not only in a tooltip. What makes this button
+		// different from the one above it is that it writes to documents the app otherwise never
+		// writes to, and an operator pressing it is entitled to be told that before they confirm
+		// rather than after.
+		//
+		// Plain text, no markup: the dialog escapes what it is given, so an emphasis marker would
+		// reach the operator as two asterisks. The box it is drawn in is what makes it stand out.
+		warning: __(
+			"هشدار: این عمل ثبت‌ها را روی فاکتورهای لغو‌شده برمی‌گرداند. ثبت‌های موجود دست‌نخورده می‌مانند و هیچ ردیفی بازنویسی یا حذف نمی‌شود."
+		),
+	},
+};
 
 function is_manager() {
 	return (
 		frappe.user.has_role("Logistics Serial Manager") || frappe.user.has_role("System Manager")
 	);
+}
+
+/** The role the historical restore asks for, on top of a Manager. */
+function is_archivist() {
+	return (
+		frappe.user.has_role("Logistics Serial Archivist") || frappe.user.has_role("System Manager")
+	);
+}
+
+/** The mode's own names, or the ordinary restore's if the caller passed one that is not ours. */
+function mode_of(name) {
+	return RESTORES[name] || RESTORES.live;
 }
 
 function export_everything(frm) {
@@ -79,9 +144,9 @@ function download(filename, text) {
 	URL.revokeObjectURL(url);
 }
 
-function restore_everything(frm) {
+function restore_everything(frm, mode) {
 	pick_file()
-		.then((file) => preview(file))
+		.then((file) => preview(file, mode))
 		.catch(() => {});
 }
 
@@ -107,12 +172,14 @@ function pick_file() {
 	});
 }
 
-function preview(file) {
+function preview(file, mode) {
+	const restore = mode_of(mode);
+
 	frappe.dom.freeze(__("در حال بررسی فایل…"));
 
 	return frappe
 		.call({
-			method: "smartprocess_logistics.api.endpoints.preview_serial_restore",
+			method: `smartprocess_logistics.api.endpoints.${restore.preview_endpoint}`,
 			type: "POST",
 			args: { content: file.content },
 		})
@@ -135,14 +202,14 @@ function preview(file) {
 				return;
 			}
 
-			show_preview(preview, file);
+			show_preview(preview, file, restore);
 		})
 		.catch(() => {
 			frappe.dom.unfreeze();
 		});
 }
 
-function show_preview(preview, file) {
+function show_preview(preview, file, restore) {
 	const rows = preview.to_create || {};
 	const skipped = preview.to_skip || {};
 
@@ -156,19 +223,47 @@ function show_preview(preview, file) {
 		__("قابل ثبت نیست: {0} ردیف.", [preview.conflicts || 0]),
 	];
 
+	// What to say about the file's records, which is not the same thing in every mode: the two
+	// assignment restores place none of them and the records restore places them. The first
+	// version of this line said "they are not restored" in all three, which in the third mode was
+	// the one sentence it must never print — a preview that contradicts what the button does.
+	const records_in_file = preview.records_in_file || 0;
+
+	if (records_in_file) {
+		const placing = (preview.to_create_records || {}).transfers || 0;
+
+		lines.push(
+			"",
+			placing
+				? __("این فایل {0} سابقهٔ انتقال دارد و {1} از آن‌ها بازآوری می‌شود.", [
+						records_in_file,
+						placing,
+				  ])
+				: __("این فایل {0} سابقهٔ انتقال هم دارد. بازآوری آن‌ها انجام نمی‌شود و فقط سابقه می‌ماند.", [
+						records_in_file,
+				  ])
+		);
+	}
+
 	const dialog = new frappe.ui.Dialog({
-		title: __("پیش‌نمایش بازیابی"),
+		title: restore.title,
 		size: "large",
 		fields: [{ fieldtype: "HTML", fieldname: "summary" }],
-		primary_action_label: __("ثبت کن"),
+		primary_action_label: restore.confirm_label,
 		primary_action: () => {
 			dialog.hide();
-			apply(preview.token, file);
+			apply(preview.token, file, restore);
 		},
 		secondary_action_label: __("انصراف"),
 	});
 
-	let html = `<div style="white-space: pre-line; margin-bottom: 12px;">${frappe.utils.escape_html(
+	let html = "";
+
+	if (restore.warning) {
+		html += `<div class="sp-restore-warning">${frappe.utils.escape_html(restore.warning)}</div>`;
+	}
+
+	html += `<div style="white-space: pre-line; margin-bottom: 12px;">${frappe.utils.escape_html(
 		lines.join("\n")
 	)}</div>`;
 
@@ -190,14 +285,14 @@ function show_preview(preview, file) {
 	dialog.show();
 }
 
-function apply(token, file) {
+function apply(token, file, restore) {
 	// The token is what ties this write to the file the operator actually saw, and the server
 	// requires it. Sending the request without one would be asking the server to weaken that
 	// check; refusing here says the same thing to the operator in a sentence they can act on.
 	if (!token) {
 		report_problem(
 			__("نشانهٔ تأیید پیش‌نمایش در دسترس نیست. فایل را دوباره انتخاب کنید."),
-			__("بازیابی سریال‌ها")
+			restore.title
 		);
 
 		return;
@@ -215,7 +310,7 @@ function apply(token, file) {
 
 	return frappe
 		.call({
-			method: "smartprocess_logistics.api.endpoints.apply_serial_restore",
+			method: `smartprocess_logistics.api.endpoints.${restore.apply_endpoint}`,
 			type: "POST",
 			args: { content: file.content, token: token },
 		})
@@ -224,16 +319,21 @@ function apply(token, file) {
 			const counts = result.counts || {};
 			const created = counts.created || {};
 
+			const records = created.transfers || [];
+
 			frappe.msgprint({
-				title: __("بازیابی سریال‌ها"),
+				title: restore.title,
 				indicator: "green",
 				message: [
 					__("ثبت‌شده: {0} سریال و {1} ردیف.", [created.serials || 0, created.assignments || 0]),
+					records.length ? __("سابقه‌های بازآوری‌شده: {0}.", [records.length]) : "",
 					__("رد شده (از قبل موجود): {0} ردیف.", [
 						(counts.skipped && counts.skipped.assignments) || 0,
 					]),
 					__("قابل ثبت نبود: {0} ردیف.", [counts.conflicts || 0]),
-				].join("<br>"),
+				]
+					.filter(Boolean)
+					.join("<br>"),
 			});
 		})
 		.catch(() => {

@@ -1,0 +1,2739 @@
+<!doctype html>
+<!--
+	The scan window, run rather than read: the real script and the real stylesheet, against a
+	stand-in Desk with a small in-memory server behind it.
+
+	Why this exists
+	---------------
+	The window's behaviour is mostly interaction — a scan that is kept, a count that moves, a red
+	cell, a button that refuses a batch — and none of that can be asserted from the source or from
+	the database-free suite. What *can* be asserted is the whole thing in a browser: this page loads
+	`public/js/sales_invoice_serial_button.js` itself, drives it through its own DOM (typing into the
+	inputs, pressing Enter, clicking the buttons) and prints one line per check.
+
+	It is a page and not a node script because it needs a DOM and jQuery, which the node harness
+	(`verify_scan_logic.js`) deliberately does not have: that one tests the pure rules, this one
+	tests what the operator does.
+
+	What is real: the station's code, its markup, its stylesheet, its event handling, and the
+	sequence of requests it makes. What is not: the Desk around it, and the server behind it — the
+	canned answer enforces the same rules the endpoints do (identity, duplicate, quantity) so the
+	window cannot be tested against a server that says yes to everything.
+
+	Open it over http, look at the render, read the results at the bottom:
+
+	    python -m http.server 8791 --bind 127.0.0.1
+	    # then: http://127.0.0.1:8791/deployment/lab/preview_scan_header.html
+-->
+<html lang="fa" dir="rtl">
+	<head>
+		<meta charset="utf-8">
+		<title>پنجرهٔ اسکن — اجرا و بررسی</title>
+		<script>
+			// The station's own files are fetched with a marker that changes on every load. This page
+			// is opened again and again while it is being worked on, and a browser that served the copy
+			// it cached an hour ago reported an old station's behaviour as if it were the new one's —
+			// which is exactly the mistake a harness exists to prevent.
+			const BUST = "?harness=" + Date.now();
+
+			// Where the station's own two files are read from: the lab's assets by default, which is
+			// the copy the site serves, or the app's `public` directory when this page is opened from a
+			// static server over the repository itself (`?base=./../../smartprocess_logistics/public`).
+			// Either way it is the same two files on disk — the lab mounts that directory — so the page
+			// runs the real station and not a copy of it, with or without the lab standing.
+			//
+			// `?lab=` moves the two static things this page does not own — Frappe's jQuery, and the
+			// station's files when `base` is not given — to another site serving the same mount, so a
+			// run does not need the lab's containers to be up: `?lab=http://localhost:8080`.
+			const QUERY = new URLSearchParams(window.location.search);
+			const LAB = QUERY.get("lab") || "http://localhost:8095";
+			const STATION_BASE = QUERY.get("base") || `${LAB}/assets/smartprocess_logistics`;
+
+			document.write(
+				`<link rel="stylesheet" href="${STATION_BASE}/css/logistics.css${BUST}">`
+			);
+		</script>
+		<style>
+			:root {
+				--card-bg: #ffffff;
+				--control-bg: #f4f5f6;
+				--border-color: #d1d8dd;
+				--border-radius: 6px;
+				--text-muted: #8d99a6;
+				--text-sm: 12px;
+				--text-xs: 11px;
+				--blue-100: #e4f0ff;
+				--blue-500: #2490ef;
+				--blue-700: #185f9e;
+				--green-100: #e4f5e9;
+				--green-500: #29cd42;
+				--green-600: #1f9d33;
+				--green-700: #278f5e;
+				--orange-100: #fff1e7;
+				--orange-500: #e86c13;
+				--orange-700: #bd3e0c;
+				--red-100: #fff0f0;
+				--red-500: #e03636;
+				--red-600: #c72323;
+				--red-700: #b52a2a;
+			}
+
+			body {
+				background: #f0f2f4;
+				font-family: system-ui, "Segoe UI", Tahoma, sans-serif;
+				margin: 0;
+				padding: 16px;
+			}
+
+			.note {
+				background: #fffbe6;
+				border: 1px solid #ffe58f;
+				border-radius: 6px;
+				font-size: 13px;
+				margin-bottom: 14px;
+				padding: 8px 10px;
+			}
+
+			#results {
+				background: #ffffff;
+				border: 1px solid var(--border-color);
+				border-radius: 6px;
+				font-family: ui-monospace, Consolas, monospace;
+				font-size: 12px;
+				margin-top: 16px;
+				padding: 10px;
+				white-space: pre-wrap;
+			}
+
+			.modal {
+				background: #fff;
+				border-radius: 8px;
+				box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+				padding: 12px;
+			}
+
+			.form-control {
+				border: 1px solid var(--border-color);
+				border-radius: 4px;
+				font: inherit;
+				padding: 4px 8px;
+				width: 100%;
+			}
+
+			.btn {
+				background: #fff;
+				border: 1px solid var(--border-color);
+				border-radius: 4px;
+				cursor: pointer;
+				font: inherit;
+				padding: 2px 8px;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="note">
+			The real scan window, against a stand-in Desk and an in-memory server that enforces the
+			same rules the endpoints do. The checks below are driven through the window's own DOM.
+		</div>
+		<div id="pane"></div>
+		<div id="results">running…</div>
+
+		<script>
+			document.write(
+				`<script src="${
+					new URLSearchParams(window.location.search).get("lab") || "http://localhost:8095"
+				}/assets/frappe/js/lib/jquery/jquery.min.js"><\/script>`
+			);
+		</script>
+		<script>
+			// --- the stand-in Desk ---------------------------------------------------------------
+
+			const shown = [];
+			const alerts = [];
+			// The form hook the station registers, kept so a scenario can drive it the way Desk does:
+			// the toolbar a real `refresh` draws is the one thing about this file that no dialog-driving
+			// scenario reaches, because it happens before any window is open.
+			const FORM_HANDLERS = {};
+			// Every dialog the page's stand-in Desk has built, in order, so a check can press the
+			// dialog's own primary action the way an operator does.
+			const DIALOGS = [];
+
+			const run_after_a_tick = () => new Promise((resolve) => window.setTimeout(resolve, 0));
+
+			const frappe = {
+				provide(namespace) {
+					let node = globalThis;
+
+					for (const part of namespace.split(".")) {
+						node[part] = node[part] || {};
+						node = node[part];
+					}
+				},
+				ui: {
+					form: {
+						// A list, because two files register a Sales Invoice hook now — the station and
+						// the transfer window — and Desk appends rather than replaces
+						// (`script_manager.js` pushes onto `frappe.ui.form.handlers[doctype][event]`). A
+						// stand-in that kept only the last one would hide the station from every check
+						// in this page.
+						on: (doctype, table) => {
+							FORM_HANDLERS[doctype] = FORM_HANDLERS[doctype] || [];
+							FORM_HANDLERS[doctype].push(table);
+						},
+					},
+					Dialog: class {
+						constructor(options) {
+							this.options = options;
+							this.$wrapper = $('<div class="modal">').appendTo("#pane");
+							this.fields_dict = { body: { $wrapper: $('<div class="modal-body">') } };
+							this.$wrapper.append(this.fields_dict.body.$wrapper);
+							// Desk keeps the dialog the caller built; this page needs the same, because
+							// «انتقال» is the dialog's own primary action and a harness that could not
+							// press it could not check what a confirmation sends.
+							DIALOGS.push(this);
+						}
+
+						show() {
+							return this;
+						}
+
+						hide() {
+							this.$wrapper.hide();
+
+							return this;
+						}
+					},
+				},
+				user: { has_role: () => true },
+				session: { user: "harness@example.test" },
+				utils: {
+					escape_html: (value) =>
+						String(value).replace(
+							/[&<>"']/g,
+							(character) =>
+								({
+									"&": "&amp;",
+									"<": "&lt;",
+									">": "&gt;",
+									'"': "&quot;",
+									"'": "&#39;",
+								}[character])
+						),
+					icon: () => "",
+				},
+				db: { get_single_value: () => Promise.resolve(1) },
+				defaults: { get_user_permissions: () => ({}) },
+				msgprint: (payload) => shown.push(payload),
+				show_alert: (payload) => alerts.push(payload),
+				// No confirmation dialog in a harness: "yes" is the only answer, because the tests
+				// below are about what happens *after* the operator agreed.
+				confirm: (message, yes) => yes && yes(),
+				call: (request) => server.answer(request),
+			};
+
+			globalThis.frappe = frappe;
+			globalThis.window = globalThis;
+			globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+			globalThis.__ = (text, args) => {
+				if (args === undefined) {
+					return text;
+				}
+
+				const list = Array.isArray(args) ? args : [args];
+
+				return text.replace(/\{(\d+)\}/g, (whole, index) =>
+					Object.prototype.hasOwnProperty.call(list, Number(index))
+						? String(list[Number(index)])
+						: whole
+				);
+			};
+
+			// --- the in-memory server ------------------------------------------------------------
+
+			const LONG = "DS-2CD2166G2-ISU (2.8mm) — دوربین تحت شبکهٔ بولت ۴ مگاپیکسل با لنز ثابت";
+
+			const server = {
+				calls: [],
+				writes: [],
+				failures: 0,
+				throw_once: false,
+				rows: {},
+				// The tokens the window asked to confirm, so a test can tell a confirm that was
+				// offered from one that was sent.
+				imports: [],
+				// The two endpoints of a transfer. The preview is computed from the request rather
+				// than scripted, because what is under test is that the *server* decides: the window
+				// sends a selection, a mapping and a set of acknowledgments, and the fixture answers
+				// about exactly that state — which is what lets a check assert that ticking an
+				// acknowledgment changes the row rather than only the chip above it.
+				transfers: [],
+				// What a file brings, per row. The real endpoint parses the bytes and validates them;
+				// this one is scripted, because what is under test here is the window's side of the
+				// round trip — that it renders the placement, that a refusal is answered by setting
+				// serials aside rather than by editing the file, and that the exclusion reaches the
+				// server with the request that follows it.
+				file: null,
+				// How many times a re-review would still refuse, so a refusal that survives the
+				// correction can be tested without a second file.
+				previews: 0,
+
+				// What the endpoint now answers with: the file's own values, in the order the reader
+				// produced them — column by column for a workbook — and nothing else. No row has been
+				// chosen, no cell interpreted and no serial validated: that is the window's intake, and
+				// this stub is a reader so the harness can prove the window does the deciding.
+				/*
+				 * The transfer preview, computed from the request the way the endpoint computes it.
+				 *
+				 * Six serials on the cancelled invoice, of which the amendment can take four: one is
+				 * live on another active invoice and needs an acknowledgment, and one has nowhere to
+				 * go. `serials` in the request is the selection the operator described, so an
+				 * unticked serial comes back as `Unselected` and an acknowledged one as `Moved` —
+				 * which is what makes the window's table a report about the operator's own answer
+				 * rather than about the last thing the server said.
+				 */
+				transfer_preview(args) {
+					const source_serials = ["A-1", "A-2", "A-3", "A-4", "A-5", "A-6"];
+					const selection = args && args.serials ? new Set(args.serials) : new Set(source_serials);
+					const acknowledged = new Set((args && args.acknowledged) || []);
+					const mapping = (args && args.mapping) || {};
+					const rows = [];
+
+					source_serials.forEach((serial, order) => {
+						const row = {
+							serial: serial,
+							item_code: "PR1",
+							source_row: "src-1",
+							source_index: 1,
+							order: order,
+							acknowledged: acknowledged.has(serial),
+							answerable: false,
+							message: "",
+							detail: "",
+							target_row: null,
+							target_index: null,
+							outcome: "Unselected",
+						};
+
+						if (!selection.has(serial)) {
+							rows.push(row);
+
+							return;
+						}
+
+						if (serial === "A-4" && !acknowledged.has(serial)) {
+							row.outcome = "ACKNOWLEDGEMENT_MISSING";
+							row.answerable = true;
+							row.message = "این سریال روی یک فاکتور فعال دیگر هم ثبت است";
+						} else if (serial === "A-5") {
+							row.outcome = "NO_ROOM";
+							row.message = "ردیف‌های این کالا در فاکتور اصلاحی جا ندارند";
+							row.detail = "PR1";
+						} else {
+							row.outcome = "Moved";
+							row.target_row = mapping[serial] || "new-1";
+							row.target_index = mapping[serial] === "new-2" ? 2 : 1;
+						}
+
+						rows.push(row);
+					});
+
+					const moving = rows.filter((row) => row.outcome === "Moved").length;
+
+					return {
+						source_invoice: args.sales_invoice,
+						target_invoice: args.target_invoice,
+						company: "SP TEST COMPANY",
+						token: `token-${rows.map((row) => row.outcome).join("")}`,
+						target_rows: [
+							{ row_key: "new-1", item_code: "PR1", index: 1, capacity: 3, held: 0, room: 3, serial_required: true },
+							{ row_key: "new-2", item_code: "PR1", index: 2, capacity: 2, held: 0, room: 2, serial_required: true },
+						],
+						serials: rows,
+						stale: [],
+						counts: {
+							source: 6,
+							moved: moving,
+							refused: rows.filter((row) => row.answerable || row.outcome === "NO_ROOM").length,
+							unselected: rows.filter((row) => row.outcome === "Unselected").length,
+							unresolved: 0,
+							acknowledged: acknowledged.size,
+						},
+					};
+				},
+
+				preview(args) {
+					this.previews += 1;
+
+					const file = this.file || { values: [] };
+
+					return {
+						sales_invoice: "HARNESS-SINV-0001",
+						values: file.values || [],
+						sheets: ["Sheet1"],
+						encoding: null,
+						numeric_cells: file.numeric_cells || 0,
+					};
+				},
+
+				reset(rows) {
+					this.calls = [];
+					this.writes = [];
+					this.failures = 0;
+					this.rows = {};
+					this.imports = [];
+					this.previews = 0;
+					this.file = null;
+					this.throw_once = false;
+					// How long a file read takes, and whether it is refused: the two things the processing
+					// notice exists for. Both are zero by default, so every other scenario reads instantly.
+					this.file_delay_ms = 0;
+					this.file_fail = null;
+					this.fail_with = null;
+					this.previews_in_flight = 0;
+
+					rows.forEach((row) => {
+						this.rows[row.row_key] = {
+							row_key: row.row_key,
+							row_index: row.row_index,
+							item_code: row.item_code,
+							model: row.model,
+							capacity: row.capacity,
+							serial_required: row.serial_required,
+							serials: (row.serials || []).slice(),
+						};
+					});
+				},
+
+				payload_row(row) {
+					const registered = row.serials.length;
+					const required = row.capacity;
+					const excess = Math.max(0, registered - row.capacity);
+
+					return {
+						row_key: row.row_key,
+						// The row's position on the invoice, not in the served list: a hidden row leaves a
+						// gap in the numbers, exactly as the endpoint leaves one, so a command naming a
+						// missing number cannot be answered by the next visible row.
+						row_index: row.row_index,
+						item_code: row.item_code,
+						model: row.model,
+						invoiced_qty: row.capacity,
+						registered: registered,
+						serial_required: row.serial_required,
+						capacity: row.capacity,
+						required: required,
+						shortage: Math.max(0, required - registered),
+						excess: excess,
+						// The one state, from the same rule the endpoint states and the window reads: with
+						// nothing in hand on the server's side, so this is the answer before any unsaved
+						// label is counted.
+						state: server.state_of(required, row.capacity, registered, 0),
+						assignments: row.serials.map((serial, index) => ({
+							name: `${row.row_key}-${index}`,
+							serial_no: serial,
+							is_excess: index >= row.capacity,
+						})),
+					};
+				},
+
+				// `core.eligibility.row_state`, in the harness: four numbers in, one name out.
+				state_of(required, capacity, persisted, staged) {
+					const held = persisted + staged;
+
+					if (held > capacity) {
+						return "CONFLICT";
+					}
+
+					if (held < required) {
+						return "INCOMPLETE";
+					}
+
+					return staged ? "STAGED" : "SAVED";
+				},
+
+				status() {
+					// **Only the rows that can take serials are served.** The rest are reported, with the
+					// position they hold on the invoice and what they already carry, so a command naming
+					// one of them can be answered by name — and never obeyed by a different row.
+					const every_row = Object.keys(this.rows).map((key) => this.payload_row(this.rows[key]));
+					const rows = every_row.filter((row) => row.serial_required);
+					const ineligible = every_row.filter((row) => !row.serial_required);
+					const registered = rows.reduce((total, row) => total + row.registered, 0);
+
+					return {
+						sales_invoice: "HARNESS-SINV-0001",
+						rows: rows,
+						ineligible_rows: ineligible,
+						scan_command: "**",
+						// The two rules a window judges its own text by, as the server serves them:
+						// the separators this site splits on, interpreted, and the serial length it
+						// allows. Served with the invoice for the same reason the command is.
+						intake: {
+							delimiters: ["\r\n", "\t", "\n", " ", ",", ";", "،", "؛"],
+							max_length: 60,
+						},
+						summary: {
+							rows: rows.length,
+							required: rows.reduce((total, row) => total + row.required, 0),
+							registered: registered,
+							shortage: rows.reduce((total, row) => total + row.shortage, 0),
+							excess: rows.reduce((total, row) => total + row.excess, 0),
+							incomplete_rows: rows.filter((row) => row.state !== "SAVED").length,
+							is_complete: rows.every((row) => row.state === "SAVED"),
+							ineligible_rows: ineligible.length,
+							ineligible_registered: ineligible.reduce(
+								(total, row) => total + row.registered,
+								0
+							),
+							excess_rows: rows.filter((row) => row.excess).length,
+							excess_serials: rows.reduce((total, row) => total + row.excess, 0),
+						},
+					};
+				},
+
+				// The rules the endpoint enforces, in the order it enforces them: identity, the row's
+				// limit, and the stored copy. A harness that said yes to everything would test the
+				// window against a server nobody has.
+				answer(request) {
+					const method = request.method.split(".").pop();
+
+					this.calls.push({ method, args: request.args });
+
+					if (method === "preview_serial_transfer") {
+						return Promise.resolve({ message: this.transfer_preview(request.args) });
+					}
+
+					if (method === "apply_serial_transfer") {
+						// A refusal of the harness's own choosing, so a scenario can ask what the
+						// window does when the server says no. Nothing is pushed: a refused apply
+						// registered nothing, and a harness that recorded one would let a window
+						// look as though it had moved serials.
+						if (this.transfer_fail_with) {
+							return Promise.reject(new Error(this.transfer_fail_with));
+						}
+
+						this.transfers.push(request.args);
+
+						return Promise.resolve({
+							message: {
+								transfer: "LST-2026-00001",
+								counts: { source: 6, moved: 4, refused: 2, unselected: 0, unresolved: 0, acknowledged: 1 },
+								message: "انتقال انجام شد.",
+							},
+						});
+					}
+
+				if (this.throw_once) {
+					this.throw_once = false;
+					// Synchronously, the way `frappe.call` fails when it fails before returning: no
+					// promise is ever created for the caller to attach a `finally` to.
+					throw new Error("the request never left");
+				}
+
+					if (method === "get_invoice_serial_status") {
+						return Promise.resolve({ message: this.status() });
+					}
+
+					if (method === "prepare_import_preview") {
+						// A read of a real file takes a real moment, and the window has to say so while
+						// it waits: `file_delay_ms` is that moment, and `file_fail` is the refusal the
+						// endpoint answers with when the bytes it was sent are not a workbook it can read.
+						this.previews_in_flight += 1;
+
+						const answer = () => {
+							this.previews_in_flight -= 1;
+
+							if (this.file_fail) {
+								return Promise.reject(new Error(this.file_fail));
+							}
+
+							return { message: this.preview(request.args) };
+						};
+
+						return new Promise((resolve) => window.setTimeout(() => resolve(answer()), this.file_delay_ms || 0));
+					}
+
+					if (method === "delete_assignments") {
+						// Removal, modelled because a column's state after it is what the window draws: the
+						// stored rows are what the next status read reports, so a delete that changed
+						// nothing here would let a window look unchanged and pass.
+						let removed = 0;
+
+						((request.args && request.args.names) || []).forEach((name) => {
+							const key = String(name).replace(/-\d+$/, "");
+							const index = Number(String(name).slice(key.length + 1));
+							const row = this.rows[key];
+
+							if (row && Number.isInteger(index) && row.serials[index] !== undefined) {
+								row.serials.splice(index, 1);
+								removed += 1;
+							}
+						});
+
+						return Promise.resolve({ message: { removed: removed } });
+					}
+
+					if (method === "confirm_import") {
+						this.imports.push(request.args.token);
+
+						return Promise.resolve({ message: { message: "۲ سریال ثبت شدند." } });
+					}
+
+					if (method === "add_row_serials") {
+						return this.answer_batch(request.args);
+					}
+
+					if (method !== "add_row_serial") {
+						return Promise.resolve({ message: {} });
+					}
+
+					return this.answer_batch({
+						...request.args,
+						serials: JSON.stringify([request.args.serial]),
+					});
+				},
+
+				// One label and twenty are the same rule, so both endpoints come here and the single
+				// one is a batch of one. What the real server guarantees — and what a window tested
+				// against a server that wrote the good half would never be asked about — is that a
+				// refused batch writes *nothing*: the checks run over the whole batch before the
+				// first push, and a refusal leaves `writes` exactly as it was.
+				answer_batch(args) {
+					return new Promise((resolve, reject) =>
+						window.setTimeout(() => {
+							const row = this.rows[args.sales_invoice_item];
+							const batch = JSON.parse(args.serials);
+							const key = (text) => String(text).trim().toUpperCase();
+							const wanted = batch.map(key);
+
+							// A refusal of the harness's own choosing, which is how a server sentence
+							// that quotes the operator's label — markup and all — is modelled.
+							if (this.fail_with) {
+								reject(new Error(this.fail_with));
+
+								return;
+							}
+
+							if (this.failures > 0) {
+								this.failures -= 1;
+								reject(new Error("Failed to fetch"));
+
+								return;
+							}
+
+							if (!row) {
+								reject(new Error("ردیف ناشناخته [ROW_UNKNOWN]"));
+
+								return;
+							}
+
+							if (wanted.some((serial, index) => wanted.indexOf(serial) !== index)) {
+								reject(new Error("این سریال در همین ردیف دو بار آمده است. [DUPLICATE_IN_ROW]"));
+
+								return;
+							}
+
+							const held = row.serials.map(key);
+
+							if (wanted.some((serial) => held.includes(serial))) {
+								reject(
+									new Error(
+										"این سریال از قبل روی همین فاکتور ثبت شده است. [ALREADY_REGISTERED]"
+									)
+								);
+
+								return;
+							}
+
+							if (row.serials.length + batch.length > row.capacity) {
+								const extra = row.serials.length + batch.length - row.capacity;
+
+								reject(
+									new Error(
+										`تعداد سریال بیش از تعداد فاکتور است؛ ${extra} سریال اضافه است. [EXCESS_QUANTITY]`
+									)
+								);
+
+								return;
+							}
+
+							batch.forEach((serial) => row.serials.push(serial));
+							this.writes.push(...batch);
+
+							resolve({ message: { row: this.payload_row(row), summary: this.status().summary } });
+						}, 8)
+					);
+				},
+			};
+
+			// --- driving the window ---------------------------------------------------------------
+</script>
+		<!-- The station itself, loaded before anything drives it: this page is the real file. -->
+		<script>
+			document.write(
+				`<script src="${STATION_BASE}/js/sales_invoice_serial_button.js${BUST}"><\/script>`
+			);
+		</script>
+		<script>
+			// The second file `hooks.py` registers for Sales Invoice, and in the same order: it uses
+			// the namespace the first one establishes, so loading it the other way round is a page
+			// that throws on load.
+			document.write(
+				`<script src="${STATION_BASE}/js/sales_invoice_serial_transfer.js${BUST}"><\/script>`
+			);
+		</script>
+		<script>
+			const column_of = (row_key) => document.querySelector(`.sp-scan-column[data-row-key="${row_key}"]`);
+			const input_of = (row_key) => column_of(row_key).querySelector(".sp-scan-input");
+			const cells_of = (row_key) => column_of(row_key).querySelectorAll(".sp-scan-cell");
+			const pending_cells_of = (row_key) => column_of(row_key).querySelectorAll(".sp-scan-cell.is-pending");
+			const excess_cells_of = (row_key) => column_of(row_key).querySelectorAll(".sp-scan-cell.is-excess");
+			const counts_of = (row_key) => column_of(row_key).querySelector(".sp-scan-counts").textContent;
+			const save_button = () => document.querySelector("[data-action='save-pending']");
+			const warning_bar = () => document.querySelector(".sp-scan-warning").textContent;
+
+			// What a scanner does: the text arrives, then Enter. Through the window's own handler,
+			// so the test exercises the same path an operator's scanner does.
+			const scan = (row_key, text, key) => {
+				const input = input_of(row_key);
+
+				input.focus();
+				input.value = text;
+				input.dispatchEvent(
+					new KeyboardEvent("keydown", { key: key || "Enter", bubbles: true, cancelable: true })
+				);
+			};
+
+			const remove_pending = (row_key, index) => {
+				const button = pending_cells_of(row_key)[index].querySelector("[data-action='delete-pending']");
+
+				button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+			};
+
+			// --- the scenarios -------------------------------------------------------------------
+
+			// Whether this page is being rendered. A pane the desktop app has hidden — because its
+			// window is behind another — has a 0x0 viewport and a throttled main thread, and every
+			// DOM write in it is measured without a layout. A timing taken there is a number about
+			// the browser's scheduling, not about the window, so the timings say which one it is.
+			const timing_context = () =>
+				document.visibilityState === "visible" && window.innerWidth > 0
+					? ""
+					: " [NOT COMPARABLE: this pane was not being rendered]";
+
+			const results = [];
+
+			const report = (condition, description, detail) => {
+				results.push(`${condition ? "ok  " : "FAIL"} ${description}${condition || !detail ? "" : ` — ${detail}`}`);
+			};
+
+			// Three columns and one row that is not a column: a five-unit row that holds nothing yet
+			// — the case the quantity scenarios are stated in — a two-unit row to keep the duplicate
+			// and failure cases small, a five-unit row that already carries one serial, so a scan of
+			// it can be refused by the server as a duplicate, and a fourth row whose item is **not**
+			// marked for serials while it already holds two of them. That last row is the one an
+			// operator sees on the invoice and this window must not show: it is served as an
+			// ineligible row, its registrations stay where they are, and `*4` earns a sentence.
+			const fresh_rows = (rows) => {
+				server.reset(rows);
+
+				$("#pane").empty();
+				alerts.length = 0;
+				shown.length = 0;
+
+				smartprocess_logistics.open_serial_dialog({
+					doc: { name: "HARNESS-SINV-0001" },
+					reload_doc: () => {},
+				});
+
+				return run_after_a_tick();
+			};
+
+			const HIDDEN_SERIALS = ["H-1", "H-2"];
+
+			const fresh = () =>
+				fresh_rows([
+					{
+						row_key: "row-1",
+						row_index: 1,
+						item_code: "PR89887",
+						model: "DS-2CD2166G2-ISU (2.8mm)",
+						capacity: 5,
+						serial_required: true,
+						serials: [],
+					},
+					{
+						row_key: "row-2",
+						row_index: 2,
+						item_code: "PR89888",
+						model: LONG,
+						capacity: 2,
+						serial_required: true,
+						serials: [],
+					},
+					{
+						row_key: "row-3",
+						row_index: 3,
+						item_code: "PR89891",
+						model: "DS-2SE4C225MWG-E 12F0",
+						capacity: 5,
+						serial_required: true,
+						serials: ["C-1"],
+					},
+					{
+						// Not a serial row: the window never draws it, and the registrations it already
+						// holds stay exactly where they are for the Desk list and the API to read.
+						row_key: "row-4",
+						row_index: 4,
+						item_code: "PR89892",
+						model: "SP-UNMARKED-ITEM",
+						capacity: 3,
+						serial_required: false,
+						serials: HIDDEN_SERIALS.slice(),
+					},
+				]);
+
+			// The same loop the timing scenario runs at the end, run here as well — first thing,
+			// on a page where nothing has happened yet. The two numbers together say whether a
+			// scan got slower or whether this page did: everything the scenarios below create is
+			// created before the *second* measurement and after this one.
+			const measure_scans = async (label) => {
+				await fresh();
+
+				const count = 120;
+
+				for (let n = 1; n <= 20; n += 1) {
+					scan("row-1", `${label}-${n}`);
+				}
+
+				// Drained first: every scan schedules a `setTimeout` of its own (the focus is put
+				// back a turn later), and a timed loop that starts on top of a backlog of them
+				// measures the backlog.
+				await new Promise((resolve) => window.setTimeout(resolve, 400));
+
+				const started = window.performance.now();
+
+				for (let n = 21; n <= count; n += 1) {
+					scan("row-1", `${label}-${n}`);
+				}
+
+				const elapsed = window.performance.now() - started;
+
+				return (elapsed / (count - 20)).toFixed(2);
+			};
+
+			// What the operator's own `01.xlsx` holds, column by column, and what the clipboard
+			// carries when that same range is copied out of it. Every populated column begins with
+			// the command for the invoice row its serials belong to — `*1` over five, `*2` over ten,
+			// `*3` over twenty — and the first column holds one cell that belongs to no command.
+			const TAB_CHAR = String.fromCharCode(9);
+			const LINE = String.fromCharCode(10);
+			//
+			// The Python suite asserts these same four columns, cell for cell, against the file, so a
+			// change in the file fails there and these lists are updated with it. Both shapes below
+			// are built from them, and the two must reach the same staging: that equivalence is what
+			// the two scenarios further down assert.
+			// The synthetic workbook in the repository (`tests/fixtures/synthetic-workbook.xlsx`),
+			// column by column as the server reads it — the same values `TestTheSyntheticWorkbook`
+			// asserts and the node harness uses, so all three read one file.
+			const REAL_COLUMN_A = ["99999999"];
+
+			const REAL_COLUMN_B = [
+				"*1",
+				"SYN-B-01",
+				"SYN-B-02",
+				"SYN-B-03",
+				"SYN-B-04",
+				"SYN-B-05"
+			];
+
+
+			const REAL_COLUMN_C = [
+				"*2",
+				"SYN-C-01",
+				"SYN-C-02",
+				"SYN-C-03",
+				"SYN-C-04",
+				"SYN-C-05",
+				"SYN-C-06",
+				"SYN-C-07",
+				"SYN-C-08",
+				"SYN-C-09",
+				"SYN-C-10"
+			];
+
+
+			const REAL_COLUMN_D = [
+				"*3",
+				"SYN-D-01",
+				"SYN-D-02",
+				"SYN-D-03",
+				"SYN-D-04",
+				"10000000005",
+				"SYN-D-06",
+				"SYN-D-07",
+				"1.23E+11",
+				"SYN-D-09",
+				"SYN-D-10",
+				"SYN-D-11",
+				"10000000012",
+				"SYN-D-13",
+				"SYN-D-14",
+				"SYN-D-15",
+				"SYN-D-16",
+				"SYN-D-17",
+				"10000000018",
+				"SYN-D-19",
+				"SYN-D-20"
+			];
+
+			// What the server answers with for that file: its nonempty cells, column by column, top
+			// to bottom — the order `core.spreadsheet.column_major_texts` produces.
+			const REAL_WORKBOOK_VALUES = [].concat(
+				REAL_COLUMN_A,
+				REAL_COLUMN_B,
+				REAL_COLUMN_C,
+				REAL_COLUMN_D
+			);
+
+			// And what an operator's clipboard carries after selecting the same range: row by row,
+			// cells between tabs, a cell that holds nothing still occupying its column. The stray
+			// cell sits in the sixteenth row of the range.
+			const REAL_STRAY_ROW = 16;
+			const REAL_WORKBOOK_CLIPBOARD = REAL_COLUMN_D.map((_cell, index) =>
+				[
+					index + 1 === REAL_STRAY_ROW ? REAL_COLUMN_A[0] : "",
+					REAL_COLUMN_B[index] || "",
+					REAL_COLUMN_C[index] || "",
+					REAL_COLUMN_D[index] || ""
+				].join(TAB_CHAR)
+			).join(LINE);
+
+			const run = async () => {
+				const early = await measure_scans("E");
+
+				// --- the toolbar: one button, one press, no menu --------------------------------
+				// The form hook is the real one — this page's stand-in Desk hands it over — and what it
+				// draws is checked for the two things a screenshot cannot say: that there is exactly one
+				// of them, and that pressing it opens the window rather than a dropdown. The second
+				// press is the one that would show a menu, and the third is the behaviour that must not
+				// regress: an invoice with no serial registration left to make gets no button at all.
+				const buttons = [];
+				const toolbar_frm = {
+					doc: { name: "HARNESS-SINV-0001", docstatus: 0, company: "SP TEST COMPANY" },
+					reload_doc: () => {},
+					add_custom_button: (label, action, group) =>
+						buttons.push({ label: label, action: action, group: group }),
+				};
+				// The station's hook is the first of the two the page captured.
+				const form_hook = FORM_HANDLERS["Sales Invoice"][0];
+
+				report(Boolean(form_hook && form_hook.refresh), "the page's Desk captured the Sales Invoice hook");
+
+				await form_hook.refresh(toolbar_frm);
+				// The hook answers with promises of its own — the settings single, then the user's
+				// company permissions — and Desk does not wait for them either: it triggers `refresh`
+				// and carries on. One tick is what the button needs to appear on a real form, so it is
+				// what this waits for.
+				await run_after_a_tick();
+
+				report(
+					buttons.length === 1,
+					"the invoice form adds exactly one serial button",
+					`buttons: ${buttons.map((button) => button.label).join(" | ") || "—"}`
+				);
+				report(
+					buttons[0].label === "سریال‌ها" && buttons[0].group === undefined,
+					"and it is one plain button labelled «سریال‌ها», not an entry inside a dropdown",
+					`label: ${buttons[0].label}, group: ${buttons[0].group}`
+				);
+				report(
+					!buttons.some((button) => /جزئیات/.test(button.label)),
+					"with no «جزئیات سریال‌ها» beside it"
+				);
+
+				// The pane is emptied rather than given a window by `fresh()`: this scenario is about the
+				// press itself, and a window already on screen would count its own columns twice. The
+				// invoice's three rows are the ones the last `fresh()` left the server holding.
+				$("#pane").empty();
+
+				buttons[0].action();
+				await new Promise((resolve) => window.setTimeout(resolve, 200));
+
+				report(
+					document.querySelectorAll(".sp-scan-column").length === 3,
+					"and one press on it opens the serial window itself, not another menu",
+					`columns: ${document.querySelectorAll(".sp-scan-column").length}`
+				);
+				report(
+					document.querySelectorAll(".sp-scan-input").length === 3,
+					"with the station's own input in every invoice row",
+					`inputs: ${document.querySelectorAll(".sp-scan-input").length}`
+				);
+
+				buttons.length = 0;
+				await form_hook.refresh({ ...toolbar_frm, doc: { ...toolbar_frm.doc, docstatus: 2 } });
+				await run_after_a_tick();
+
+				report(buttons.length === 0, "a cancelled invoice gets no serial button", `buttons: ${buttons.length}`);
+
+				await fresh();
+
+				// --- five asked for, seven scanned: kept, not written ---------------------------
+				await fresh();
+
+				for (let n = 1; n <= 7; n += 1) {
+					scan("row-1", `W-${n}`);
+					await run_after_a_tick();
+				}
+
+				report(server.writes.length === 0, "seven scans wrote nothing to the server", `writes: ${server.writes.length}`);
+				report(
+					server.calls.filter((call) => call.method === "add_row_serial").length === 0,
+					"and not one registration was requested"
+				);
+				report(cells_of("row-1").length === 7, "all seven are on screen", `cells: ${cells_of("row-1").length}`);
+				report(pending_cells_of("row-1").length === 7, "all seven are marked as unsaved");
+				report(excess_cells_of("row-1").length === 2, "exactly the last two are red", `red: ${excess_cells_of("row-1").length}`);
+				report(/ذخیره‌نشده/.test(counts_of("row-1")), "the column counts them as unsaved", counts_of("row-1"));
+				report(/مازاد/.test(counts_of("row-1")), "and counts two as excess", counts_of("row-1"));
+				report(!save_button().disabled, "the save action is available");
+				report(input_of("row-1") === document.activeElement, "the cursor is still in the box it scans into");
+
+				// --- saving seven into five: refused whole ---------------------------------------
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await run_after_a_tick();
+
+				report(server.writes.length === 0, "the refused save wrote nothing", `writes: ${server.writes.length}`);
+				report(pending_cells_of("row-1").length === 7, "and kept every scan on screen");
+				report(/ذخیره انجام نشد/.test(warning_bar()), "the window says the save did not happen", warning_bar());
+				report(
+					shown.some((payload) => /DS-2CD2166G2-ISU/.test(payload.message) && /مازاد|بیش از/.test(payload.message)),
+					"and names the item and the excess in a message"
+				);
+
+				// --- remove two, save five into five ---------------------------------------------
+				remove_pending("row-1", 6);
+				await run_after_a_tick();
+				remove_pending("row-1", 5);
+				await run_after_a_tick();
+
+				report(pending_cells_of("row-1").length === 5, "two scans were removed", `left: ${pending_cells_of("row-1").length}`);
+				report(excess_cells_of("row-1").length === 0, "and nothing is red any more");
+				report(!/مازاد/.test(counts_of("row-1")), "and the excess count is gone with them", counts_of("row-1"));
+
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 600));
+
+				report(server.writes.length === 5, "the save wrote the five that were left", `writes: ${server.writes.length}`);
+				report(pending_cells_of("row-1").length === 0, "and nothing is waiting any more");
+				report(cells_of("row-1").length === 5, "the column shows five saved serials", `cells: ${cells_of("row-1").length}, pending: ${pending_cells_of("row-1").length}, written: ${server.writes.join(",")}`);
+				report(save_button().disabled, "the save action is disabled again");
+				report(
+					alerts.some((payload) => /ذخیره شد/.test(payload.message)),
+					"and the operator is told how many were saved",
+					JSON.stringify(alerts)
+				);
+
+				// --- a duplicate on the way in ---------------------------------------------------
+				await fresh();
+				scan("row-2", "D-1");
+				await run_after_a_tick();
+				scan("row-2", "D-1");
+				await run_after_a_tick();
+
+				report(pending_cells_of("row-2").length === 1, "the same label twice is kept once");
+				report(/قبلاً ثبت شده/.test(warning_bar()), "and the second scan is answered in the warning line", warning_bar());
+				report(server.writes.length === 0, "with nothing written either time");
+
+				// --- a label this invoice already carries --------------------------------------
+				// The duplicate policy is about **this invoice**, and the window can already see what
+				// it holds: row 3 arrives carrying C-1, so a scan of C-1 is refused as it is scanned
+				// rather than staged and refused later. That is the difference the scope of the rule
+				// makes — and the same label on *another* invoice is not this case at all.
+				await fresh();
+				scan("row-3", "C-1");
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-3").length === 0,
+					"a serial this invoice already holds is not staged for a second time",
+					`pending: ${pending_cells_of("row-3").length}`
+				);
+				report(
+					/قبلاً ثبت شده/.test(warning_bar()),
+					"and the operator is told which serial it was",
+					warning_bar()
+				);
+				report(server.writes.length === 0, "with nothing written either way");
+
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(
+					server.writes.length === 0 && !server.calls.some((call) => call.method === "add_row_serials"),
+					"and a save with nothing staged sends no request at all"
+				);
+
+
+				// --- a lost connection stops the batch --------------------------------------------
+				await fresh();
+				scan("row-2", "N-1");
+				scan("row-2", "N-2");
+				scan("row-2", "N-3");
+				await run_after_a_tick();
+				server.failures = 1;
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(server.writes.length === 0, "a failure nobody predicted writes nothing");
+				report(
+					pending_cells_of("row-2").length === 3,
+					"and leaves the whole batch waiting, so nothing is lost",
+					`waiting: ${pending_cells_of("row-2").length}`
+				);
+
+				// --- rapid scans while a save is in flight ---------------------------------------
+				await fresh();
+				scan("row-2", "R-1");
+				await run_after_a_tick();
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+				scan("row-2", "R-2");
+				scan("row-2", "R-3");
+				await new Promise((resolve) => window.setTimeout(resolve, 400));
+
+				report(server.writes.join(",") === "R-1", "a scan during a save is not written by that save", server.writes.join(","));
+				report(pending_cells_of("row-2").length === 2, "and it waits its turn instead of being dropped");
+				report(input_of("row-2") === document.activeElement, "with the cursor still in the column");
+
+				// --- the next-column command, with unsaved scans in hand -------------------------
+				await fresh();
+				scan("row-1", "**");
+				await run_after_a_tick();
+
+				report(pending_cells_of("row-1").length === 0, "the command is not kept as a scan");
+				report(server.writes.length === 0, "and it writes nothing");
+				report(input_of("row-2") === document.activeElement, "it moves the cursor to the next column");
+				scan("row-2", "K-1");
+				await run_after_a_tick();
+
+				report(pending_cells_of("row-2").length === 1, "and a scan there still lands in that column");
+				report(pending_cells_of("row-1").length === 0, "leaving the first column empty of scans");
+
+				// --- a row that already holds a serial --------------------------------------------
+				await fresh();
+				scan("row-3", "O-1");
+				scan("row-3", "O-2");
+				await run_after_a_tick();
+
+				report(pending_cells_of("row-3").length === 2, "a row that already has a serial keeps the new scans too");
+				report(/ذخیره‌نشده/.test(counts_of("row-3")), "and counts them as unsaved", counts_of("row-3"));
+				report(/نیاز/.test(counts_of("row-3")), "against the requirement the invoice states for it", counts_of("row-3"));
+
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(server.writes.join(",") === "O-1,O-2", "and saves them in the order they were scanned", server.writes.join(","));
+
+				// --- one save is one request per column -------------------------------------------
+				// Not one per label: a column of twenty scans is one round trip and one answer, and
+				// the answer covers the column rather than each label separately.
+				await fresh();
+				scan("row-1", "S-1");
+				scan("row-1", "S-2");
+				scan("row-1", "S-3");
+				await run_after_a_tick();
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 400));
+
+				report(
+					server.calls.filter((call) => call.method === "add_row_serials").length === 1,
+					"a column of three saves in one batch request",
+					`batches: ${server.calls.filter((call) => call.method === "add_row_serials").length}`
+				);
+				report(
+					server.calls.filter((call) => call.method === "add_row_serial").length === 0,
+					"and not one single-label request",
+					`singles: ${server.calls.filter((call) => call.method === "add_row_serial").length}`
+				);
+				report(server.writes.join(",") === "S-1,S-2,S-3", "the batch wrote every label", server.writes.join(","));
+				report(pending_cells_of("row-1").length === 0, "and the column is empty of unsaved scans");
+
+				// --- a refusal is the whole column's --------------------------------------------
+				// `E-1` is already on the invoice and `F-1` is not. The server refuses the batch, so
+				// `F-1` — a label that would have been accepted on its own — is not written either.
+				// A window that reported "saved" here would have the operator close it believing the
+				// invoice holds a serial it does not.
+				await fresh();
+				server.rows["row-2"].serials.push("E-1");
+				scan("row-2", "F-1");
+				scan("row-2", "E-1");
+				await run_after_a_tick();
+
+				report(pending_cells_of("row-2").length === 2, "both labels are waiting, including the one already registered");
+				report(
+					!/قبلاً ثبت شده/.test(warning_bar()),
+					"and nothing refuses it on the way in — only the server knows what the invoice holds",
+					warning_bar()
+				);
+
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(server.writes.length === 0, "the refused batch wrote nothing at all", `writes: ${server.writes.join(",")}`);
+				report(pending_cells_of("row-2").length === 2, "and both labels stay on screen to be corrected");
+				report(
+					shown.some((payload) => /ذخیره انجام نشد/.test(payload.message)),
+					"the save says it did not complete",
+					shown.map((payload) => payload.message).join(" | ")
+				);
+				report(
+					shown.some((payload) => /از قبل روی همین فاکتور ثبت شده/.test(payload.message)),
+					"and the server's own reason reaches the operator",
+					shown.map((payload) => payload.message).join(" | ")
+				);
+				report(
+					shown.some((payload) => /F-1، E-1/.test(payload.message)),
+					"with both labels of the refused column named in one line",
+					shown.map((payload) => payload.message).join(" | ")
+				);
+
+				// --- the server's limit still decides -------------------------------------------
+				// The window's own check would refuse this before it left the browser, so the batch
+				// is sent straight to the server instead: the client is a convenience, and this is
+				// the guard that holds when it is wrong, bypassed or out of date.
+				await fresh();
+				server
+					.answer({
+						method: "smartprocess_logistics.api.endpoints.add_row_serials",
+						args: { sales_invoice_item: "row-2", serials: JSON.stringify(["Z-1", "Z-2", "Z-3"]) },
+					})
+					.then(
+						() => report(false, "an over-capacity batch sent straight to the server is refused"),
+						(error) =>
+							report(
+								/EXCESS_QUANTITY/.test(error.message),
+								"an over-capacity batch sent straight to the server is refused",
+								error.message
+							)
+					);
+				await run_after_a_tick();
+
+				report(server.writes.length === 0, "and it wrote nothing", `writes: ${server.writes.join(",")}`);
+				report(server.rows["row-2"].serials.length === 0, "the row is still empty");
+
+				// --- a file's values stage into the same columns as everything else -------------
+				// The values below are what the reader returns for a workbook shaped like the one an
+				// operator sent: the first cell of each column holds an addressing command, the
+				// columns beneath it hold its serials, and the columns are of different lengths.
+				// Nothing is written by the import; `#2` selects row 2 for the five values under it,
+				// `**` moves to the next row for the three after that, and Save — and only Save —
+				// writes what the columns hold.
+				await fresh();
+
+				server.file = {
+					values: [
+						"#2", "I-1", "I-2", "I-3", "I-4", "I-5",
+						"**", "K-1", "K-2", "K-3",
+					],
+				};
+
+				const import_area = () => document.querySelector(".sp-scan-preview");
+				const preview_button = () => document.querySelector("[data-action='preview']");
+				const file = new File(["anything"], "01.xlsx", { type: "application/octet-stream" });
+				const transfer = new DataTransfer();
+
+				transfer.items.add(file);
+				document.querySelector(".sp-logistics-file").files = transfer.files;
+
+				preview_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(server.previews === 1, "the chosen file is sent for preview once", `previews: ${server.previews}`);
+				report(server.writes.length === 0, "and reading a file writes nothing", `writes: ${server.writes.length}`);
+				report(
+					pending_cells_of("row-2").length === 5,
+					"`#2` sends every value under it, and only those, to invoice row 2",
+					`row-2 pending: ${pending_cells_of("row-2").length}`
+				);
+				report(
+					pending_cells_of("row-3").length === 3,
+					"and the next-row command moves the rest to the row after it",
+					`row-3 pending: ${pending_cells_of("row-3").length}`
+				);
+				report(
+					pending_cells_of("row-1").length === 0,
+					"with nothing left where the values did not belong",
+					`row-1 pending: ${pending_cells_of("row-1").length}`
+				);
+				report(
+					excess_cells_of("row-2").length === 3,
+					"the values a two-unit row has no room for are staged, and red",
+					`red in row-2: ${excess_cells_of("row-2").length}`
+				);
+				report(
+					/در ستون‌ها قرار گرفت/.test(import_area().textContent),
+					"the summary says what the file turned into",
+					import_area().textContent.replace(/\s+/g, " ").slice(0, 120)
+				);
+
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(server.writes.length === 0, "saving an over-full column writes nothing");
+				report(pending_cells_of("row-2").length === 5, "and keeps every staged serial on screen");
+
+				await fresh();
+
+				// --- the operator's own workbook, value for value ---------------------------------
+				// `01.xlsx`, read column by column: `*1` in B1 with its five serials, `*2` in C1 with
+				// its ten, `*3` in D1 with its twenty — and the one cell of column A that belongs to no
+				// command. Row 1 invoices five units here, so its column is over-full by that one cell
+				// on purpose: everything that arrived is staged, and the excess is red until somebody
+				// removes it. The Python suite asserts these same columns against the file itself, so
+				// the two stay in step.
+				await fresh();
+
+				server.file = { values: REAL_WORKBOOK_VALUES };
+				document.querySelector(".sp-logistics-file").files = transfer.files;
+
+				preview_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 400));
+
+				const staged = (row_key) => pending_cells_of(row_key).length;
+				const staged_serials_of = (row_key) =>
+					Array.from(pending_cells_of(row_key)).map((cell) =>
+						cell.querySelector(".sp-scan-serial").textContent.trim()
+					);
+				const first_of = (row_key) => staged_serials_of(row_key)[0];
+
+				report(staged("row-2") === 10, "the ten serials of column C are staged on invoice row 2", `row-2: ${staged("row-2")}`);
+				report(staged("row-3") === 20, "the twenty of column D on invoice row 3", `row-3: ${staged("row-3")}`);
+				report(
+					staged("row-1") === 5 + REAL_COLUMN_A.length,
+					"and the five of column B on invoice row 1, beside the one cell of column A",
+					`row-1: ${staged("row-1")}`
+				);
+				report(
+					staged_serials_of("row-1").slice(1).join(",") === REAL_COLUMN_B.slice(1).join(","),
+					"row 1 holds exactly column B's five serials, in the order they were written",
+					staged_serials_of("row-1").join(",")
+				);
+				report(
+					staged_serials_of("row-2").join(",") === REAL_COLUMN_C.slice(1).join(","),
+					"row 2 holds exactly column C's ten",
+					staged_serials_of("row-2").join(",")
+				);
+				report(
+					staged_serials_of("row-3").join(",") === REAL_COLUMN_D.slice(1).join(","),
+					"row 3 holds exactly column D's twenty",
+					staged_serials_of("row-3").join(",")
+				);
+				report(
+					first_of("row-1") === REAL_COLUMN_A[0],
+					"the cell of the column with no command is staged first, in row 1, rather than dropped",
+					`row-1 first: ${first_of("row-1")}`
+				);
+				report(
+					first_of("row-2") === "SYN-C-01" && first_of("row-3") === "SYN-D-01",
+					"and each command column starts with its own first serial, so nothing was shuffled",
+					`row-2 first: ${first_of("row-2")}, row-3 first: ${first_of("row-3")}`
+				);
+				report(server.writes.length === 0, "and none of it was written by the import");
+
+				// Kept for the clipboard scenario below: the very same staging, arrived at from a paste.
+				const FILE_STAGING = {
+					"row-1": staged_serials_of("row-1"),
+					"row-2": staged_serials_of("row-2"),
+					"row-3": staged_serials_of("row-3")
+				};
+				const FILE_WARNING = warning_bar();
+
+				server.file = null;
+
+
+				// --- what is already saved stays saved -------------------------------------------
+				// Row 3 arrives holding C-1, and everything below stages and saves around it. Nothing
+				// here may remove, replace or rewrite a registration the invoice already had: the window
+				// adds, and only the two delete controls take anything away.
+				await fresh();
+
+				const saved_before = cells_of("row-3").length;
+				const saved_name = cells_of("row-3")[0].getAttribute("data-assignment");
+
+				scan("row-3", "K-9");
+				await run_after_a_tick();
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(
+					cells_of("row-3").length === saved_before + 1,
+					"a saved registration is still there after a save that added one beside it",
+					`before: ${saved_before}, after: ${cells_of("row-3").length}`
+				);
+				report(
+					cells_of("row-3")[0].getAttribute("data-assignment") === saved_name,
+					"with the same registration at the same place, not a replacement",
+					cells_of("row-3")[0].getAttribute("data-assignment")
+				);
+				report(
+					server.writes.join(",") === "K-9",
+					"and the save sent only the new label",
+					server.writes.join(",")
+				);
+
+				// --- a pasted list is the same intake as a scanned one --------------------------
+				// A spreadsheet column pasted into a box arrives tab-separated, and the operator's
+				// list may carry a command in the middle of it: the tokens before `**` belong to this
+				// column, the ones after it to the next. Everything the paste cannot use — a label
+				// already staged, a label that is not a serial — is refused on its own and the rest is
+				// still staged, and none of it is written.
+				await fresh();
+
+				const paste_into = (row_key, text) => {
+					const input = input_of(row_key);
+					const clipboard = new DataTransfer();
+
+					clipboard.setData("text/plain", text);
+					input.focus();
+					input.dispatchEvent(
+						new ClipboardEvent("paste", {
+							clipboardData: clipboard,
+							bubbles: true,
+							cancelable: true,
+						})
+					);
+				};
+
+				paste_into(
+					"row-1",
+					["P-1", "P-2"].join(TAB_CHAR) + LINE + "**" + LINE + "P-3"
+				);
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-1").length === 2,
+					"a pasted list is split and staged in the column it was pasted into",
+					`row-1 pending: ${pending_cells_of("row-1").length}`
+				);
+				report(
+					pending_cells_of("row-2").length === 1,
+					"the part after the command is staged in the next column",
+					`row-2 pending: ${pending_cells_of("row-2").length}`
+				);
+				report(server.writes.length === 0, "and a paste writes nothing");
+				report(
+					input_of("row-2") === document.activeElement,
+					"the cursor ends up where the last token put it"
+				);
+
+				// The same labels, pasted again: refused one by one, and the list carries on.
+				paste_into("row-1", ["P-1", "P-4"].join(TAB_CHAR));
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-1").length === 3,
+					"a duplicate in a pasted list is dropped without dropping the rest",
+					`row-1 pending: ${pending_cells_of("row-1").length}`
+				);
+				report(
+					/تکراری/.test(warning_bar()),
+					"and the window says which kind of thing it refused",
+					warning_bar()
+				);
+
+				// A token that is not a serial at all, and a row number this invoice does not have.
+				paste_into("row-1", ["P-5", "*9"].join(TAB_CHAR));
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-1").length === 4,
+					"a command naming a row that is not here stages nothing",
+					`row-1 pending: ${pending_cells_of("row-1").length}`
+				);
+				report(
+					!pending_cells_of("row-3").length,
+					"and does not silently become a serial somewhere else"
+				);
+
+				// `*N` selects the row the columns show as #N.
+				paste_into("row-1", ["*3", "P-6"].join(TAB_CHAR));
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-3").length === 1,
+					"`*3` stages the token after it in the column numbered 3",
+					`row-3 pending: ${pending_cells_of("row-3").length}`
+				);
+
+				// A paste of one value is left to the browser, so an operator can still read it.
+				const single = input_of("row-1");
+
+				single.focus();
+				single.value = "";
+				paste_into("row-1", "P-7");
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-1").length === 4,
+					"a paste of a single value is not taken over, and stages nothing by itself",
+					`row-1 pending: ${pending_cells_of("row-1").length}`
+				);
+
+				await fresh();
+
+				// --- a pasted list starts in the column it was pasted into -------------------------
+				// Clicking a column's input and pasting is an operator saying where those serials
+				// belong, so the field's own row is where they begin. Starting every paste at the
+				// invoice's first row sent a list pasted into row 3 to row 1, and a list carrying no
+				// command had nothing to correct it with.
+				for (const target of ["row-1", "row-2", "row-3"]) {
+					await fresh();
+
+					paste_into(target, ["A-1", "A-2"].join(TAB_CHAR));
+					await run_after_a_tick();
+
+					report(
+						staged_serials_of(target).join(",") === "A-1,A-2",
+						`a command-less paste into ${target} stages in ${target}`,
+						["row-1", "row-2", "row-3"]
+							.map((key) => `${key}: ${staged_serials_of(key).join(",") || "—"}`)
+							.join(" | ")
+					);
+				}
+
+				// The same three rows, typed and scanned: a keyboard is aimed at a column too, and it
+				// was never the broken one — which is exactly why the paste had to match it.
+				for (const target of ["row-1", "row-2", "row-3"]) {
+					await fresh();
+
+					scan(target, "T-1");
+					await run_after_a_tick();
+
+					report(
+						staged_serials_of(target).join(",") === "T-1",
+						`a label typed into ${target} stays in ${target}`,
+						["row-1", "row-2", "row-3"]
+							.map((key) => `${key}: ${staged_serials_of(key).join(",") || "—"}`)
+							.join(" | ")
+					);
+				}
+
+				// --- a command in the list overrides the column, and may switch again --------------
+				// The field says where the list begins; a command says where it goes from there, and
+				// every later command moves it again. `#2` and `*1` are the same command as the
+				// column-numbered rows they name.
+				await fresh();
+				paste_into("row-3", ["N-1", "#2", "N-2", "*1", "N-3"].join(TAB_CHAR));
+				await run_after_a_tick();
+
+				report(
+					staged_serials_of("row-3").join(",") === "N-1",
+					"the serial before any command stays in the column it was pasted into",
+					`row-3: ${staged_serials_of("row-3").join(",") || "—"}`
+				);
+				report(
+					staged_serials_of("row-2").join(",") === "N-2",
+					"`#2` sends everything after it to invoice row 2",
+					`row-2: ${staged_serials_of("row-2").join(",") || "—"}`
+				);
+				report(
+					staged_serials_of("row-1").join(",") === "N-3",
+					"and `*1` after it moves the rest again, to row 1",
+					`row-1: ${staged_serials_of("row-1").join(",") || "—"}`
+				);
+
+				// --- the same range pasted: one intake, the same rows -------------------------------
+				// A multi-column clipboard is what this is about. Copied out of the spreadsheet the
+				// workbook came from, the same range arrives as a table — rows on lines, cells between
+				// tabs — and its three commands head three *columns*. Read across instead of down, the
+				// first line's commands are all consumed before a single serial arrives and every serial
+				// lands in the row the last one named; read column by column, as a workbook is read, the
+				// paste and the file put the same serials on the same rows.
+				await fresh();
+
+				// Pasted into row 1, which is where the file's own values begin: the file has no column
+				// to have been dropped into, so row 1 is its starting row, and pasting into row 1 is
+				// the like-for-like comparison. The cell of the command-less column is un-commanded, so
+				// it starts where the paste started, exactly as it starts where the file starts.
+				paste_into("row-1", REAL_WORKBOOK_CLIPBOARD);
+				await run_after_a_tick();
+
+				const paste_staging = {
+					"row-1": staged_serials_of("row-1"),
+					"row-2": staged_serials_of("row-2"),
+					"row-3": staged_serials_of("row-3")
+				};
+
+				report(
+					paste_staging["row-1"].join(",") === FILE_STAGING["row-1"].join(",") &&
+						paste_staging["row-2"].join(",") === FILE_STAGING["row-2"].join(",") &&
+						paste_staging["row-3"].join(",") === FILE_STAGING["row-3"].join(","),
+					"the pasted table stages what the workbook staged: the same serials on the same rows, in the same order",
+					`paste ${paste_staging["row-1"].length}/${paste_staging["row-2"].length}/${paste_staging["row-3"].length}, ` +
+						`file ${FILE_STAGING["row-1"].length}/${FILE_STAGING["row-2"].length}/${FILE_STAGING["row-3"].length}`
+				);
+				report(
+					paste_staging["row-1"].length === 6 &&
+						paste_staging["row-2"].length === 10 &&
+						paste_staging["row-3"].length === 20,
+					"five serials under `*1` on row 1, ten under `*2` on row 2, twenty under `*3` on row 3",
+					`${paste_staging["row-1"].length}/${paste_staging["row-2"].length}/${paste_staging["row-3"].length}`
+				);
+				report(
+					paste_staging["row-1"].slice(1).join(",") === REAL_COLUMN_B.slice(1).join(",") &&
+						paste_staging["row-2"].join(",") === REAL_COLUMN_C.slice(1).join(",") &&
+						paste_staging["row-3"].join(",") === REAL_COLUMN_D.slice(1).join(","),
+					"each serial under the command written at the head of its own column",
+					`row-1: ${paste_staging["row-1"].join(",")}`
+				);
+				report(
+					paste_staging["row-1"][0] === REAL_COLUMN_A[0] &&
+						paste_staging["row-1"][1] === REAL_COLUMN_B[1],
+					"including the cell of the command-less column, read first as the workbook reads it",
+					`row-1 first two: ${paste_staging["row-1"].slice(0, 2).join(",")}`
+				);
+				report(server.writes.length === 0, "and a pasted table writes nothing either");
+				report(
+					warning_bar() === FILE_WARNING,
+					"the same validation result as the workbook's, sentence for sentence",
+					`paste: ${warning_bar()} — file: ${FILE_WARNING}`
+				);
+
+				// The same table pasted into another column. The three command columns are unmoved —
+				// a command rules its own column wherever the paste began — and the one cell that no
+				// command names follows the click, which is the whole reason it exists as a rule.
+				await fresh();
+
+				paste_into("row-3", REAL_WORKBOOK_CLIPBOARD);
+				await run_after_a_tick();
+
+				report(
+					staged_serials_of("row-3").slice(1).join(",") === REAL_COLUMN_D.slice(1).join(",") &&
+						staged_serials_of("row-2").join(",") === REAL_COLUMN_C.slice(1).join(",") &&
+						staged_serials_of("row-1").join(",") === REAL_COLUMN_B.slice(1).join(","),
+					"the commanded columns land on their own rows however the table was pasted",
+					`${staged_serials_of("row-1").length}/${staged_serials_of("row-2").length}/${staged_serials_of("row-3").length}`
+				);
+				report(
+					staged_serials_of("row-3")[0] === REAL_COLUMN_A[0],
+					"and the cell no command names follows the column the paste was made in",
+					`row-3 first: ${staged_serials_of("row-3")[0]}`
+				);
+
+				// --- the same serials as one column, commands and all -------------------------------
+				// The operator's second paste: one value per line, no tabs, and the row commands
+				// interspersed by hand — `*1` then five, `*3` then twenty, `*2` then ten. It is a list
+				// and not a table, so it keeps the sequential reading: each command moves the cursor for
+				// everything under it, switches and all, and the last one does not rule the whole list.
+				await fresh();
+
+				const SINGLE_COLUMN = []
+					.concat(
+						[REAL_COLUMN_B[0]].concat(REAL_COLUMN_B.slice(1)),
+						[REAL_COLUMN_D[0]].concat(REAL_COLUMN_D.slice(1)),
+						[REAL_COLUMN_C[0]].concat(REAL_COLUMN_C.slice(1))
+					)
+					.join(LINE);
+
+				paste_into("row-2", SINGLE_COLUMN);
+				await run_after_a_tick();
+
+				report(
+					staged_serials_of("row-1").join(",") === REAL_COLUMN_B.slice(1).join(",") &&
+						staged_serials_of("row-2").join(",") === REAL_COLUMN_C.slice(1).join(",") &&
+						staged_serials_of("row-3").join(",") === REAL_COLUMN_D.slice(1).join(","),
+					"a one-column paste with commands in the middle keeps its sequential reading",
+					`row-1: ${staged_serials_of("row-1").length}, row-2: ${staged_serials_of("row-2").length}, ` +
+						`row-3: ${staged_serials_of("row-3").length}`
+				);
+				report(
+					staged_serials_of("row-1").length === 5 &&
+						staged_serials_of("row-2").length === 10 &&
+						staged_serials_of("row-3").length === 20,
+					"and the same five, ten and twenty, on the rows its commands named",
+					`${staged_serials_of("row-1").length}/${staged_serials_of("row-2").length}/${staged_serials_of("row-3").length}`
+				);
+
+				// A cursor that switches back: the row a serial belongs to is the row the last command
+				// named, however many times that has changed.
+				await fresh();
+
+				paste_into("row-1", ["*2", "S-1", "*1", "S-2", "*2", "S-3"].join(LINE));
+				await run_after_a_tick();
+
+				report(
+					staged_serials_of("row-2").join(",") === "S-1,S-3" &&
+						staged_serials_of("row-1").join(",") === "S-2",
+					"a list that switches rows twice puts each serial in the row its own command named",
+					`row-1: ${staged_serials_of("row-1").join(",")} — row-2: ${staged_serials_of("row-2").join(",")}`
+				);
+				report(
+					staged_serials_of("row-3").length === 0,
+					"and nothing follows the last row named into a row nobody named",
+					`row-3: ${staged_serials_of("row-3").join(",")}`
+				);
+
+				// The same table pasted twice. A paste is staged the moment it arrives and writes
+				// nothing, so the second one is a second read of serials the invoice already holds unsaved:
+				// every one of them is refused as a duplicate and not one is staged twice.
+				await fresh();
+
+				paste_into("row-1", REAL_WORKBOOK_CLIPBOARD);
+				await run_after_a_tick();
+				const first_paste = pending_cells_of("row-1").length + pending_cells_of("row-2").length + pending_cells_of("row-3").length;
+				paste_into("row-1", REAL_WORKBOOK_CLIPBOARD);
+				await run_after_a_tick();
+				const second_paste = pending_cells_of("row-1").length + pending_cells_of("row-2").length + pending_cells_of("row-3").length;
+
+				report(
+					first_paste === 36 && second_paste === first_paste,
+					"the same table pasted again stages nothing a second time",
+					`first: ${first_paste}, second: ${second_paste}`
+				);
+				report(
+					/تکراری/.test(warning_bar()),
+					"and it says the serials it refused were duplicates rather than dropping them quietly",
+					warning_bar()
+				);
+				report(server.writes.length === 0, "with nothing written by either paste");
+
+				// --- gray, green, blue, red: one row, four states ----------------------------------
+				// The lifecycle an operator works through, on the real window, read off the painted
+				// header rather than off a class name — a class that paints nothing is not a state
+				// anybody can see. Row 3 is the fixture's part-filled row: five units, one serial
+				// already saved, so the four states are four scans apart.
+				const head_colour = (row_key) =>
+					window.getComputedStyle(column_of(row_key).querySelector(".sp-scan-head"))
+						.backgroundColor;
+				const GREEN_HEAD = "rgb(228, 245, 233)";
+				const BLUE_HEAD = "rgb(228, 240, 255)";
+				const RED_HEAD = "rgb(255, 240, 240)";
+				const NEUTRAL_HEAD = "rgb(244, 245, 246)";
+				const state_of_row = (row_key) =>
+					column_of(row_key).className
+						.split(" ")
+						.filter((name) => name.startsWith("is-") )
+						.join(" ") || "is-incomplete";
+
+				await fresh();
+				await run_after_a_tick();
+
+				report(
+					column_of("row-3").classList.contains("is-incomplete") &&
+						head_colour("row-3") === NEUTRAL_HEAD,
+					"gray: a row short of what it needs is drawn plain",
+					`${state_of_row("row-3")} — ${head_colour("row-3")}`
+				);
+
+				// Four more scans: five of five, none of them written.
+				for (let n = 1; n <= 4; n += 1) {
+					scan("row-3", `G-${n}`);
+				}
+
+				await run_after_a_tick();
+
+				report(
+					column_of("row-3").classList.contains("is-staged") &&
+						head_colour("row-3") === GREEN_HEAD,
+					"green: exactly what it needs, with labels still in hand",
+					`${state_of_row("row-3")} — ${head_colour("row-3")}`
+				);
+				report(
+					column_of("row-3").querySelector(".sp-scan-tick").textContent.trim() === "",
+					"and no tick yet: the tick is the invoice's answer, not the operator's work"
+				);
+				report(server.writes.length === 0, "with nothing written to make it green");
+
+				// Saving it: the server confirms, the pending labels leave, and the row is blue.
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(
+					column_of("row-3").classList.contains("is-saved") &&
+						head_colour("row-3") === BLUE_HEAD,
+					"blue: saved, with nothing left in hand",
+					`${state_of_row("row-3")} — ${head_colour("row-3")}`
+				);
+				report(
+					column_of("row-3").querySelector(".sp-scan-tick").textContent.trim() === "✓",
+					"and the tick that says the server answered"
+				);
+				report(
+					pending_cells_of("row-3").length === 0 && server.writes.length === 4,
+					"with the four labels written and none of them left on screen",
+					`pending: ${pending_cells_of("row-3").length}, writes: ${server.writes.length}`
+				);
+
+				// One more scan into a saved, full row: work on a row that has to be fixed, so red —
+				// and blue is gone before the operator presses anything.
+				scan("row-3", "G-5");
+				await run_after_a_tick();
+
+				report(
+					column_of("row-3").classList.contains("is-conflict") &&
+						head_colour("row-3") === RED_HEAD &&
+						column_of("row-3").querySelector(".sp-scan-tick").textContent.trim() === "",
+					"red: one label past the invoice's quantity, on a row that was blue",
+					`${state_of_row("row-3")} — ${head_colour("row-3")}`
+				);
+
+				// Removing that scan takes it straight back to blue: the state is recomputed from the
+				// counts, and the saved labels never moved.
+				remove_pending("row-3", pending_cells_of("row-3").length - 1);
+				await run_after_a_tick();
+
+				report(
+					column_of("row-3").classList.contains("is-saved") &&
+						head_colour("row-3") === BLUE_HEAD,
+					"and removing it puts the row back where the server left it",
+					`${state_of_row("row-3")} — ${head_colour("row-3")}`
+				);
+
+				// Green back to gray: a paste that reaches the quantity and then a removal that
+				// takes the row under it again.
+				await fresh();
+				paste_into("row-3", ["P-1", "P-2", "P-3", "P-4"].join(TAB_CHAR));
+				await run_after_a_tick();
+
+				report(
+					column_of("row-3").classList.contains("is-staged"),
+					"a paste that reaches the quantity stages the row green",
+					`${state_of_row("row-3")}`
+				);
+
+				remove_pending("row-3", pending_cells_of("row-3").length - 1);
+				await run_after_a_tick();
+
+				report(
+					column_of("row-3").classList.contains("is-incomplete") &&
+						head_colour("row-3") === NEUTRAL_HEAD,
+					"and removing one of those labels takes it back to gray",
+					`${state_of_row("row-3")} — ${head_colour("row-3")}`
+				);
+
+				// A row over its quantity is red whatever else is true about it.
+				await fresh();
+
+				for (let n = 1; n <= 7; n += 1) {
+					scan("row-3", `X-${n}`);
+				}
+
+				await run_after_a_tick();
+
+				report(
+					column_of("row-3").classList.contains("is-conflict") &&
+						!column_of("row-3").classList.contains("is-staged"),
+					"a row past its quantity is the conflict state and nothing else",
+					`classes: ${column_of("row-3").className}`
+				);
+
+				// --- a row that cannot take serials is not a row ------------------------------------
+				// The invoice has a fourth row whose item is not marked for serials, and it already
+				// holds two registrations. It is not served, so it has no column, no colour and no
+				// count — and the two registrations it holds are untouched, which is what the Desk list
+				// and the API are for. A command naming it must earn a sentence and move nothing.
+				await fresh();
+				await run_after_a_tick();
+
+				report(
+					document.querySelectorAll(".sp-scan-column").length === 3,
+					"a row whose item is not marked is not drawn",
+					`columns: ${document.querySelectorAll(".sp-scan-column").length}`
+				);
+				report(
+					!document.querySelector(".sp-scan-column[data-row-key='row-4']"),
+					"and it has no column to be drawn in"
+				);
+				report(
+					document.querySelector("#pane").textContent.indexOf(HIDDEN_SERIALS[0]) < 0,
+					"with the registrations it already holds nowhere in the window",
+					HIDDEN_SERIALS.join(", ")
+				);
+				report(
+					/ردیف‌های بدون ثبت سریال/.test(document.querySelector(".sp-logistics-summary").textContent),
+					"while the window still says the invoice has such a row",
+					document.querySelector(".sp-logistics-summary").textContent
+				);
+
+				paste_into("row-1", ["*4", "N-1"].join(TAB_CHAR));
+				await run_after_a_tick();
+
+				report(
+					/فعال نیست/.test(warning_bar()),
+					"a command naming that row is answered, not obeyed",
+					warning_bar()
+				);
+				report(
+					pending_cells_of("row-2").length === 0 && pending_cells_of("row-3").length === 0,
+					"and it is not obeyed by another row: the serial after it stays at the cursor",
+					`row-1: ${pending_cells_of("row-1").length}, row-2: ${pending_cells_of("row-2").length}, ` +
+						`row-3: ${pending_cells_of("row-3").length}`
+				);
+				report(
+					pending_cells_of("row-1").length === 1,
+					"which is the row the paste was made in, exactly as a refused command leaves it",
+					`row-1: ${pending_cells_of("row-1").length}`
+				);
+
+				// The same rule with the hidden row **in the middle**, which is the case that would
+				// silently move a command to another row if the served rows were renumbered: `*2` names
+				// the row that cannot take serials, and must not become the second column.
+				await fresh_rows([
+					{
+						row_key: "row-1",
+						row_index: 1,
+						item_code: "A",
+						model: "FIRST",
+						capacity: 2,
+						serial_required: true,
+						serials: [],
+					},
+					{
+						row_key: "row-2",
+						row_index: 2,
+						item_code: "B",
+						model: "HIDDEN",
+						capacity: 2,
+						serial_required: false,
+						serials: ["HIDDEN-1"],
+					},
+					{
+						row_key: "row-3",
+						row_index: 3,
+						item_code: "C",
+						model: "THIRD",
+						capacity: 2,
+						serial_required: true,
+						serials: [],
+					},
+				]);
+
+				report(
+					document.querySelectorAll(".sp-scan-column").length === 2 &&
+						column_of("row-1").querySelector(".sp-scan-index").textContent.indexOf("1") >= 0 &&
+						column_of("row-3").querySelector(".sp-scan-index").textContent.indexOf("3") >= 0,
+					"the visible columns keep the invoice's own row numbers, gap and all",
+					Array.from(document.querySelectorAll(".sp-scan-column .sp-scan-index"))
+						.map((node) => node.textContent.trim())
+						.join(" | ")
+				);
+
+				paste_into("row-1", ["*2", "M-1"].join(TAB_CHAR));
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-3").length === 0,
+					"and `*2` naming the hidden row does not become the next visible one",
+					`row-1: ${pending_cells_of("row-1").length}, row-3: ${pending_cells_of("row-3").length}`
+				);
+
+				paste_into("row-1", ["*3", "M-2"].join(TAB_CHAR));
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-3").length === 1,
+					"while `*3`, the row after it, is still reached by its own number",
+					`row-3: ${pending_cells_of("row-3").length}`
+				);
+
+				// --- a refusal that quotes the label is text, not markup ----------------------------
+				// The server's sentences carry the serial they are about, and `frappe.msgprint`
+				// renders what it is given. A label that reads `<img …>` must appear as those
+				// characters: the station escapes the sentence before Frappe sees it.
+				await fresh();
+
+				shown.length = 0;
+				server.fail_with = "سریال نامعتبر: <img src=x onerror=alert(1)> [BAD_SERIAL]";
+				scan("row-1", "S-1");
+				await run_after_a_tick();
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 250));
+
+				const quoting = shown
+					.map((payload) => payload.message)
+					.filter((message) => /BAD_SERIAL/.test(message));
+
+				report(
+					quoting.length > 0,
+					"the refusal reached the window, quoting the serial it refused",
+					shown.map((payload) => payload.message).join(" | ") || "no message was shown"
+				);
+				report(
+					quoting.every((message) => !/<img src=x/.test(message)),
+					"and no message that quotes it renders the label as markup",
+					quoting.join(" | ") || "no message quoted it"
+				);
+
+				server.fail_with = null;
+
+				// --- reading a file: an unmistakable notice, and controls that come back -----------
+				// A file is the one input the window cannot answer by itself, and the one an operator
+				// presses twice. While the request is out the notice stands where the result will
+				// appear, the picker and the button are out of reach, and a second press asks for
+				// nothing — then everything comes back, whether the read succeeded or failed.
+				await fresh();
+
+				server.file = { values: ["F-1", "F-2"] };
+				server.file_delay_ms = 120;
+				document.querySelector(".sp-logistics-file").files = transfer.files;
+				preview_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+				report(
+					/فایل در حال پردازش است/.test(document.querySelector(".sp-scan-preview").textContent),
+					"a file being read says the file is being processed, in Persian, while it is",
+					document.querySelector(".sp-scan-preview").textContent.trim()
+				);
+				report(
+					preview_button().disabled &&
+						document.querySelector(".sp-logistics-file").disabled,
+					"and the button and the picker cannot be used again until it is over"
+				);
+
+				preview_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(
+					server.calls.filter((call) => call.method === "prepare_import_preview").length === 1,
+					"a second press during the read asks the server for nothing",
+					`previews asked for: ${
+						server.calls.filter((call) => call.method === "prepare_import_preview").length
+					}`
+				);
+				report(
+					staged_serials_of("row-1").join(",") === "F-1,F-2",
+					"and when the answer arrives its serials are staged",
+					`row-1: ${staged_serials_of("row-1").join(",")}`
+				);
+				report(
+					!preview_button().disabled &&
+						!/در حال پردازش است/.test(document.querySelector(".sp-scan-preview").innerHTML),
+					"the notice is replaced by the receipt and the controls come back",
+					document.querySelector(".sp-scan-preview").textContent.trim()
+				);
+
+				// A read the server refuses: the message is Persian, the reason is the server's own, and
+				// the window is usable again rather than left saying it is still working.
+				await fresh();
+
+				server.file_fail = "کاربرگ خوانده نشد: فایل خراب است.";
+				document.querySelector(".sp-logistics-file").files = transfer.files;
+				preview_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(
+					/خواندن فایل انجام نشد/.test(document.querySelector(".sp-scan-preview").textContent) &&
+						document.querySelector(".sp-scan-preview").textContent.includes("فایل خراب است"),
+					"a refused read says so, with the server's own Persian reason",
+					document.querySelector(".sp-scan-preview").textContent.trim()
+				);
+				report(
+					!preview_button().disabled &&
+						!document.querySelector(".sp-logistics-file").disabled &&
+						!pending_cells_of("row-1").length,
+					"and it restores the controls without staging anything"
+				);
+
+				// The read failed before the promise existed, the way a browser refuses a file it cannot
+				// read. Nothing may be left disabled and nothing may be left saying it is working.
+				await fresh();
+
+				server.throw_once = true;
+				document.querySelector(".sp-logistics-file").files = transfer.files;
+				preview_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(
+					!preview_button().disabled && server.previews_in_flight === 0,
+					"a read that never left leaves no control disabled and no flag set",
+					`disabled: ${preview_button().disabled}, in flight: ${server.previews_in_flight}`
+				);
+
+				server.file_fail = null;
+				server.file_delay_ms = 0;
+				server.file = null;
+				server.throw_once = false;
+				await fresh();
+
+				// --- the model name: one line, truncating its start, whole in the tooltip --------
+				// A Hikvision model is long and its **end** is what tells two of them apart, so the
+				// column shows one line and clips the beginning. `getClientRects()` counts the line
+				// boxes a box actually produced, which is the measurement that says "one line" rather
+				// than a stylesheet that says `nowrap`.
+				await fresh_rows([
+					{
+						row_key: "row-1",
+						row_index: 1,
+						item_code: "PR89887",
+						model: "DS-2CD2347G2-LU (2.8mm) — دوربین بولت ۴ مگاپیکسل با لنز ثابت و دید در شب",
+						capacity: 2,
+						serial_required: true,
+						serials: [],
+					},
+					{
+						row_key: "row-2",
+						row_index: 2,
+						item_code: "PR89888",
+						model: "DS-2CD2347G2-LU 4MP bullet camera, fixed lens (2.8mm)",
+						capacity: 2,
+						serial_required: true,
+						serials: [],
+					},
+				]);
+
+				const title = column_of("row-1").querySelector(".sp-scan-title");
+				const style = window.getComputedStyle(title);
+
+				report(
+					title.getClientRects().length === 1,
+					"a long model name is drawn on one line, whatever its length",
+					`line boxes: ${title.getClientRects().length}`
+				);
+				report(
+					style.whiteSpace === "nowrap" && style.overflow === "hidden",
+					"the name is not allowed to wrap",
+					`white-space: ${style.whiteSpace}, overflow: ${style.overflow}`
+				);
+				report(
+					style.textOverflow === "ellipsis" && style.direction === "rtl",
+					"and it truncates at the side that keeps the end of the name",
+					`text-overflow: ${style.textOverflow}, direction: ${style.direction}`
+				);
+				report(
+					title.scrollWidth > title.clientWidth,
+					"the name is longer than the space, so the truncation is engaged",
+					`${title.scrollWidth} > ${title.clientWidth}`
+				);
+				report(
+					(title.getAttribute("title") || "").startsWith("DS-2CD2347G2-LU"),
+					"and the whole name is available in the tooltip",
+					title.getAttribute("title")
+				);
+				report(
+					column_of("row-2").querySelector(".sp-scan-title").getClientRects().length === 1,
+					"and a name that fits is on one line too"
+				);
+
+				// Which characters the browser actually paints, measured on an element that is given a
+				// width of its own. The dialog's columns are as wide as the window the app has, and a
+				// window the app has hidden gives them none — so this measures the CSS on a controlled
+				// box instead, where the answer does not depend on how the pane happens to be sized.
+				// Each character gets a `Range`; a character whose rectangle lies entirely right of the
+				// box is a character the box has cut away. That is the truncation itself, on the side it
+				// happens on, which no stylesheet assertion can promise.
+				const sides = (text, width) => {
+					const probe = document.createElement("div");
+
+					probe.setAttribute("class", "sp-scan-title");
+					probe.setAttribute("style", `width: ${width}px; display: block;`);
+					probe.textContent = text;
+					document.body.appendChild(probe);
+
+					const frame = probe.getBoundingClientRect();
+					const node = probe.firstChild;
+					const answer = { drawn: [], before: 0, after: 0, boxes: probe.getClientRects().length };
+
+					for (let index = 0; index < node.length; index += 1) {
+						const range = document.createRange();
+
+						range.setStart(node, index);
+						range.setEnd(node, index + 1);
+
+						const rect = range.getBoundingClientRect();
+
+						if (!rect.width) {
+							continue;
+						}
+
+						if (rect.right <= frame.left + 0.5) {
+							answer.before += 1;
+						} else if (rect.left >= frame.right - 0.5) {
+							answer.after += 1;
+						} else {
+							answer.drawn.push(index);
+						}
+					}
+
+					probe.remove();
+
+					return answer;
+				};
+
+				const LATIN = "DS-2CD2347G2-LU 4MP bullet camera, fixed lens (2.8mm)";
+				const cut = sides(LATIN, 120);
+
+				report(
+					cut.before > 0 && cut.after === 0,
+					"a name too long for its column loses its beginning and keeps its end",
+					`cut before: ${cut.before}, after: ${cut.after} of ${LATIN.length}`
+				);
+				report(
+					cut.drawn[cut.drawn.length - 1] === LATIN.length - 1,
+					"the last character of the name is still painted",
+					`last painted: ${cut.drawn[cut.drawn.length - 1]} of ${LATIN.length - 1}`
+				);
+				report(
+					LATIN.slice(cut.drawn[0]).endsWith("(2.8mm)"),
+					"so the lens size at the very end of it survives whole",
+					LATIN.slice(cut.drawn[0] || 0)
+				);
+				report(
+					cut.drawn.length > 0 && cut.drawn[0] > 0,
+					"and what is painted starts partway into the name",
+					`first painted: ${cut.drawn[0]}`
+				);
+				report(cut.boxes === 1, "on one line", `line boxes: ${cut.boxes}`);
+
+
+				// --- what a column's heading is made of -----------------------------------------
+				report(
+					pending_cells_of("row-1").length === 0,
+					"and the heading changes nothing about what is staged"
+				);
+
+				// --- the window recovers when a call fails before it becomes a promise ----------
+				// The shape of the fault that left «در حال ثبت…» on screen for ever: a call that
+				// throws synchronously, so the caller's `finally` never had a promise to attach to.
+				// The window has to be usable again afterwards, with what was staged still there.
+				const before = pending_cells_of("row-1").length;
+
+				report(before === 0, "the recovery scenario starts from an empty window");
+
+				scan("row-1", "R-1");
+				await run_after_a_tick();
+
+				const progress = () => document.querySelector(".sp-scan-progress");
+
+				// A file has to be chosen, or the window refuses the click itself and never reaches
+				// the server — which would leave the failure this scenario is about untested.
+				server.file = { incoming: { "row-1": ["N-1"] } };
+				document.querySelector(".sp-logistics-file").files = transfer.files;
+				server.throw_once = true;
+
+				preview_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(
+					server.calls.filter((call) => call.method === "prepare_import_preview").length === 1,
+					"the preview request was made, and it is the one that failed",
+					`previews attempted: ${server.calls.filter((call) => call.method === "prepare_import_preview").length}`
+				);
+				report(
+					progress().classList.contains("is-hidden"),
+					"a call that throws before returning a promise leaves no «در حال ثبت…» behind",
+					progress().className
+				);
+				report(
+					!save_button().disabled,
+					"and the Save action is usable again",
+					save_button().disabled ? "disabled" : "enabled"
+				);
+				report(
+					pending_cells_of("row-1").length === 1,
+					"with everything that was staged still staged",
+					`row-1 pending: ${pending_cells_of("row-1").length}`
+				);
+
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+				await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+				report(
+					server.writes.join(",") === "R-1",
+					"and a save after it writes the staged label",
+					server.writes.join(",")
+				);
+				report(
+					progress().classList.contains("is-hidden"),
+					"and the window is idle again after a completed save",
+					progress().className
+				);
+
+				await fresh();
+
+
+				// --- a scanner that sends no terminator ------------------------------------------
+				// Two labels, one after the other, with the first one never ended by Enter or Tab —
+				// which is how a wedge configured without a suffix behaves. The second label must
+				// not be appended to the first: that is the report this measures.
+				await fresh();
+
+				const wedge_types = (row_key, text) => {
+					const input = input_of(row_key);
+
+					input.focus();
+
+					for (const character of text) {
+						input.value = `${input.value}${character}`;
+						input.dispatchEvent(new Event("input", { bubbles: true }));
+					}
+				};
+
+				wedge_types("row-2", "TERM1");
+				await new Promise((resolve) => window.setTimeout(resolve, 400));
+				wedge_types("row-2", "TERM2");
+				await new Promise((resolve) => window.setTimeout(resolve, 400));
+
+				report(
+					pending_cells_of("row-2").length === 2,
+					"a scanner with no terminator still gets one label per scan",
+					`cells: ${pending_cells_of("row-2").length}, box: ${JSON.stringify(input_of("row-2").value)}`
+				);
+				const filed = [...pending_cells_of("row-2")].map((cell) =>
+					cell.querySelector(".sp-scan-serial").textContent.trim()
+				);
+
+				report(
+					filed.join(",") === "TERM1,TERM2",
+					"and no two labels are concatenated into one",
+					`filed: ${filed.join(" | ")}`
+				);
+
+				// --- a hand-typed serial is not split by the same fallback -----------------------
+				await fresh();
+
+				const typed = "W-12345";
+
+				for (const character of typed) {
+					const input = input_of("row-2");
+
+					input.focus();
+					input.value = `${input.value}${character}`;
+					input.dispatchEvent(new Event("input", { bubbles: true }));
+					await new Promise((resolve) => window.setTimeout(resolve, 90));
+				}
+
+				await new Promise((resolve) => window.setTimeout(resolve, 400));
+
+				report(
+					pending_cells_of("row-2").length === 0,
+					"a serial typed by hand at human speed is not filed behind the operator's back",
+					`cells: ${pending_cells_of("row-2").length}`
+				);
+				report(
+					input_of("row-2").value === typed,
+					"and it is left whole and untouched in the box, for the operator to end themselves",
+					`box: ${JSON.stringify(input_of("row-2").value)}`
+				);
+
+				// --- a composition event is not a scan -------------------------------------------
+				await fresh();
+
+				const composing = input_of("row-2");
+
+				composing.focus();
+				composing.value = "شا";
+				composing.dispatchEvent(
+					new KeyboardEvent("keydown", {
+						key: "Enter",
+						bubbles: true,
+						cancelable: true,
+						isComposing: true,
+					})
+				);
+				await run_after_a_tick();
+
+				report(
+					pending_cells_of("row-2").length === 0,
+					"an Enter that ends an IME composition is not taken as the end of a scan"
+				);
+				report(
+					input_of("row-2").value === "شا",
+					"and the half-composed text is left in the box",
+					JSON.stringify(input_of("row-2").value)
+				);
+
+				// --- what saving a column costs --------------------------------------------------
+				// The per-label save this replaced sent one request per scan and redrew the column
+				// after each answer. The measurement that matters is not the round trip — this
+				// server answers in 8 ms on purpose — but the number of requests and redraws a
+				// column's save is made of.
+				await fresh_rows([
+					{
+						row_key: "row-1",
+						row_index: 1,
+						item_code: "PR89889",
+						model: "SIXTY-UNIT ROW",
+						capacity: 60,
+						serial_required: true,
+						serials: [],
+					},
+				]);
+
+				for (let n = 1; n <= 40; n += 1) {
+					scan("row-1", `M-${n}`);
+				}
+
+				await run_after_a_tick();
+
+				const save_started = window.performance.now();
+
+				save_button().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+				// Measured to the moment the column is empty of unsaved scans — the end of the save
+				// as the operator experiences it — rather than over a fixed wait, which would
+				// measure the wait.
+				for (let wait = 0; wait < 500; wait += 2) {
+					if (pending_cells_of("row-1").length === 0) {
+						break;
+					}
+
+					await new Promise((resolve) => window.setTimeout(resolve, 2));
+				}
+
+				const save_elapsed = window.performance.now() - save_started;
+				const batches = server.calls.filter((call) => call.method === "add_row_serials");
+				const singles = server.calls.filter((call) => call.method === "add_row_serial");
+
+				report(batches.length === 1 && singles.length === 0, "forty scans save as one request", `batches: ${batches.length}, singles: ${singles.length}`);
+				report(server.writes.length === 40, "and all forty are written", `writes: ${server.writes.length}`);
+				report(
+					JSON.parse(batches[0].args.serials).join(",") ===
+						Array.from({ length: 40 }, (_, index) => `M-${index + 1}`).join(","),
+					"sending the labels in the order they were scanned, whole"
+				);
+				report(
+					true,
+					`saving forty labels took ${save_elapsed.toFixed(0)} ms: one request, one redraw${timing_context()}`
+				);
+
+				// --- what one scan costs ---------------------------------------------------------
+				await fresh();
+
+				const scans = 200;
+
+				for (let n = 1; n <= 40; n += 1) {
+					scan("row-1", `B-${n}`);
+				}
+
+				await new Promise((resolve) => window.setTimeout(resolve, 400));
+
+				const started = window.performance.now();
+
+				for (let n = 41; n <= scans; n += 1) {
+					scan("row-1", `B-${n}`);
+				}
+
+				const elapsed = window.performance.now() - started;
+
+				report(
+					true,
+					`${scans - 40} scans into one column took ${elapsed.toFixed(0)} ms (${(
+						elapsed /
+						(scans - 40)
+					).toFixed(2)} ms each), timed after the page was allowed to settle${timing_context()}`,
+					`cells in that column: ${cells_of("row-1").length}`
+				);
+
+				const late = await measure_scans("L");
+
+				report(
+					true,
+					`the same ${120 - 20}-scan loop costs ${early} ms each at the start of this run and ${late} ms each at the end${timing_context()}`
+				);
+
+				// --- the transfer window -----------------------------------------------------------
+				// The second button on a Sales Invoice, and the half a source text cannot check: that
+				// a press opens a table, that the table is the server's own list in the server's own
+				// order, that ticking an acknowledgment asks the server again rather than promoting
+				// the row by itself, and that what the apply sends is the selection the screen showed.
+				const transfer_buttons = [];
+				const reloads = [];
+				const transfer_frm = {
+					doc: {
+						name: "HARNESS-SINV-0002",
+						docstatus: 1,
+						company: "SP TEST COMPANY",
+						amended_from: "HARNESS-SINV-0001",
+					},
+					reload_doc: () => reloads.push(1),
+					add_custom_button: (label, action, group) =>
+						transfer_buttons.push({ label: label, action: action, group: group }),
+				};
+				const transfer_hook = FORM_HANDLERS["Sales Invoice"][1];
+
+				report(Boolean(transfer_hook && transfer_hook.refresh), "the page captured the transfer hook too");
+
+				await transfer_hook.refresh(transfer_frm);
+				await run_after_a_tick();
+
+				report(
+					transfer_buttons.length === 1 && transfer_buttons[0].label === "انتقال سریال",
+					"an amended invoice adds one «انتقال سریال» button",
+					`buttons: ${transfer_buttons.map((button) => button.label).join(" | ") || "—"}`
+				);
+				report(
+					transfer_buttons[0].group === undefined,
+					"and it is a plain button rather than an entry inside a dropdown"
+				);
+
+				$("#pane").empty();
+				server.transfers.length = 0;
+				transfer_buttons[0].action();
+				await new Promise((resolve) => window.setTimeout(resolve, 200));
+
+				const transfer_rows = () => Array.from(document.querySelectorAll(".sp-transfer-table tbody tr"));
+				const transfer_cell = (row, index) => row.children[index].textContent.trim();
+
+				report(
+					transfer_rows().length === 6,
+					"one press opens a table with one row per serial the cancelled invoice holds",
+					`rows: ${transfer_rows().length}`
+				);
+				report(
+					transfer_rows().map((row) => transfer_cell(row, 1)).join(",") === "A-1,A-2,A-3,A-4,A-5,A-6",
+					"in the server's own order, not grouped by outcome",
+					transfer_rows().map((row) => transfer_cell(row, 1)).join(",")
+				);
+				report(
+					document.querySelectorAll(".sp-transfer-status.is-ok").length === 4 &&
+						document.querySelectorAll(".sp-transfer-status.is-warning").length === 1 &&
+						document.querySelectorAll(".sp-transfer-status.is-blocked").length === 1,
+					"four moving, one needing an answer, one with nowhere to go",
+					`ok: ${document.querySelectorAll(".sp-transfer-status.is-ok").length}, warning: ${
+						document.querySelectorAll(".sp-transfer-status.is-warning").length
+					}, blocked: ${document.querySelectorAll(".sp-transfer-status.is-blocked").length}`
+				);
+				report(
+					transfer_cell(transfer_rows()[3], 3).indexOf("تأیید") >= 0,
+					"the serial that needs an answer says so in its own cell"
+				);
+				report(
+					document.querySelectorAll(".sp-transfer-ack").length === 1 &&
+						document.querySelectorAll(".sp-transfer-pick").length === 4,
+					"and it is the only row offered an acknowledgment, beside the four that can move",
+					`acks: ${document.querySelectorAll(".sp-transfer-ack").length}, picks: ${document.querySelectorAll(".sp-transfer-pick").length}`
+				);
+				report(
+					document.querySelectorAll(".sp-transfer-table tbody tr")[4].querySelector(
+						".sp-transfer-pick, .sp-transfer-ack"
+					) === null,
+					"while the row with nowhere to go is offered nothing to change"
+				);
+				report(
+					document.querySelectorAll(".sp-transfer-row-select").length === 4,
+					"a row of an item with more than one place to go gets a select",
+					`selects: ${document.querySelectorAll(".sp-transfer-row-select").length}`
+				);
+				report(
+					document.querySelector(".sp-transfer-table").textContent.indexOf("A-1") >= 0 &&
+						document.querySelectorAll(".sp-transfer-table td[dir='ltr']").length > 0,
+					"the serials are drawn left to right whatever the form's direction"
+				);
+				report(
+					document.querySelector(".sp-transfer-toolbar").textContent.indexOf("HARNESS-SINV-0001") >= 0,
+					"and the cancelled invoice is named at the top of the window"
+				);
+
+				// The acknowledgment is a question, so the answer goes to the server and comes back
+				// as an outcome: the row must stop saying it needs an answer.
+				const transfer_calls = () =>
+					server.calls.filter((call) => call.method === "preview_serial_transfer").length;
+
+				const before_ack = transfer_calls();
+
+				$(".sp-transfer-ack").prop("checked", true).trigger("change");
+				await new Promise((resolve) => window.setTimeout(resolve, 200));
+
+				report(
+					transfer_calls() === before_ack + 1,
+					"ticking an acknowledgment asks the server again rather than deciding by itself",
+					`calls: ${before_ack} → ${transfer_calls()}`
+				);
+				report(
+					document.querySelectorAll(".sp-transfer-status.is-ok").length === 5 &&
+						document.querySelectorAll(".sp-transfer-status.is-warning").length === 0,
+					"and the row stops saying it needs an answer",
+					`ok: ${document.querySelectorAll(".sp-transfer-status.is-ok").length}, warning: ${
+						document.querySelectorAll(".sp-transfer-status.is-warning").length
+					}`
+				);
+				report(
+					transfer_cell(transfer_rows()[3], 3).indexOf("تأییدشده") >= 0,
+					"and reads as a move the operator confirmed",
+					transfer_cell(transfer_rows()[3], 3)
+				);
+
+				// Un-ticking a serial is the operator saying it stays where it is, and the row keeps
+				// the box that took it out — so the tick is reversible without closing the window.
+				$(".sp-transfer-pick").first().prop("checked", false).trigger("change");
+				await new Promise((resolve) => window.setTimeout(resolve, 200));
+
+				report(
+					transfer_cell(transfer_rows()[0], 3).indexOf("انتخاب نشده") >= 0,
+					"un-ticking a serial says it is not being asked for",
+					transfer_cell(transfer_rows()[0], 3)
+				);
+				report(
+					transfer_rows()[0].querySelector(".sp-transfer-pick") !== null,
+					"and the row keeps the box, so the answer can be taken back"
+				);
+
+				$(".sp-transfer-pick").first().prop("checked", true).trigger("change");
+				await new Promise((resolve) => window.setTimeout(resolve, 200));
+
+				report(
+					transfer_rows().filter((row) => row.querySelector(".sp-transfer-pick:checked")).length === 5,
+					"and taking it back puts all five movable serials back in the selection",
+					`ticked: ${transfer_rows().filter((row) => row.querySelector(".sp-transfer-pick:checked")).length}`
+				);
+
+				// The press itself. `frappe.confirm` in this page answers yes, because the tests are
+				// about what happens after the operator agreed.
+				const open_dialog = DIALOGS[DIALOGS.length - 1];
+
+				open_dialog.options.primary_action();
+				await new Promise((resolve) => window.setTimeout(resolve, 200));
+
+				report(server.transfers.length === 1, "confirming sends exactly one apply", `applies: ${server.transfers.length}`);
+				report(
+					server.transfers[0].serials.join(",") === "A-1,A-2,A-3,A-4,A-5,A-6",
+					"naming the serials the table showed as moving",
+					server.transfers[0].serials.join(",")
+				);
+				report(
+					server.transfers[0].acknowledged.join(",") === "A-4",
+					"carrying the acknowledgment the operator gave",
+					server.transfers[0].acknowledged.join(",")
+				);
+				report(
+					Boolean(server.transfers[0].token),
+					"and the token the preview it was looking at returned"
+				);
+				report(reloads.length === 1, "and the form is reloaded so the columns show the new rows");
+				report(
+					shown.some((payload) => /LST-2026-00001/.test(String(payload.message || ""))),
+					"the record's name is shown in the result"
+				);
+
+				// --- a refusal, and the retry it has to leave possible --------------------------
+				// What the window owns when the server says no. It does not swallow the refusal,
+				// it does not reload a form whose serials did not move, and it does not offer the
+				// same stale request again — a refusal is exactly what a stale token produces, so
+				// it asks for a fresh preview and leaves the operator where they were.
+				//
+				// The sentence itself is shown by Frappe: `frappe.call` renders `_server_messages`
+				// for every refused request, which is why the window's own catch has nothing to say
+				// and why nothing here asserts that it does. The harness's stand-in for `frappe.call`
+				// is not that renderer, so what is asserted is the window's half of the exchange.
+				// Counted from the calls rather than from `server.previews`: that counter belongs to
+				// the workbook preview, and the transfer preview is a different endpoint.
+				const transfer_previews = () =>
+					server.calls.filter((call) => call.method === "preview_serial_transfer").length;
+
+				const previews_before_refusal = transfer_previews();
+				const reloads_before_refusal = reloads.length;
+				const applies_before_refusal = server.transfers.length;
+
+				server.transfer_fail_with =
+					"درخواست دیگری هم‌زمان روی همین سند در حال ثبت بود. چیزی ثبت نشد؛ لطفاً دوباره تلاش کنید.";
+
+				// A **fresh** dialog: the one the success above came from was hidden, and hiding it
+				// forgets the preview it was holding (`state.preview = null` in its `onhide`), so a
+				// press on that dialog would be refused by the window's own guard and nothing would
+				// reach the server. The refusal has to be the first press of a dialog whose preview
+				// is live — which is also the situation an operator is actually in.
+				transfer_buttons[0].action();
+				await new Promise((resolve) => window.setTimeout(resolve, 250));
+
+				const refused_dialog = DIALOGS[DIALOGS.length - 1];
+
+				refused_dialog.options.primary_action();
+				await new Promise((resolve) => window.setTimeout(resolve, 250));
+
+				report(
+					server.transfers.length === applies_before_refusal,
+					"a refused apply registers nothing",
+					`applies ${applies_before_refusal} → ${server.transfers.length}`
+				);
+				report(
+					transfer_previews() > previews_before_refusal,
+					"and the window asks for a fresh preview rather than repeating a stale request",
+					`previews ${previews_before_refusal} → ${transfer_previews()}`
+				);
+				report(
+					reloads.length === reloads_before_refusal,
+					"the form is not reloaded over a refusal that moved nothing",
+					`reloads ${reloads_before_refusal} → ${reloads.length}`
+				);
+				report(
+					refused_dialog.$wrapper.find(".sp-transfer-table tbody tr").length > 0,
+					"the table is still there, so the operator has not lost what they were reviewing"
+				);
+				// Busy is the only state this page can see: Desk's own footer button is not part of
+				// the dialog this harness builds, so whether it is enabled is asserted by the retry
+				// below instead — a button that stayed disabled could not send a second apply.
+				report(
+					refused_dialog.$wrapper.find(".sp-transfer-toolbar").hasClass("is-busy") === false,
+					"and it is no longer busy, so the operator can press again"
+				);
+
+				// The retry itself: the same press, with the server answering this time.
+				server.transfer_fail_with = "";
+
+				DIALOGS[DIALOGS.length - 1].options.primary_action();
+				await new Promise((resolve) => window.setTimeout(resolve, 250));
+
+				report(
+					server.transfers.length === applies_before_refusal + 1,
+					"pressing again sends the apply a second time",
+					`applies ${server.transfers.length}`
+				);
+				report(
+					reloads.length === reloads_before_refusal + 1,
+					"and a retry that succeeds reloads the form",
+					`reloads ${reloads.length}`
+				);
+
+				// An invoice that is not an amendment has nothing to transfer from.
+				transfer_buttons.length = 0;
+				await transfer_hook.refresh({
+					...transfer_frm,
+					doc: { ...transfer_frm.doc, amended_from: "" },
+				});
+				await run_after_a_tick();
+
+				report(transfer_buttons.length === 0, "an invoice that is not an amendment gets no button");
+
+				transfer_buttons.length = 0;
+				await transfer_hook.refresh({ ...transfer_frm, doc: { ...transfer_frm.doc, docstatus: 2 } });
+				await run_after_a_tick();
+
+				report(transfer_buttons.length === 0, "and neither does a cancelled one");
+
+				// --- the render the tests above left behind --------------------------------------
+				await fresh();
+				scan("row-2", "P-1");
+				scan("row-2", "P-2");
+				scan("row-2", "P-3");
+				await run_after_a_tick();
+			};
+
+			const render = () => {
+				const bar = document.getElementById("results");
+
+				if (!bar) {
+					return;
+				}
+
+				const failed = results.filter((row) => row.startsWith("FAIL")).length;
+
+				bar.textContent = `${results.join("\n")}\n\n${
+					failed ? `FAIL (${failed} of ${results.length})` : `PASS (${results.length} checks)`
+				}`;
+
+				bar.style.borderColor = failed ? "#e03636" : "#29cd42";
+				window.harness_results = results;
+			};
+
+			// A scenario that throws is a result too — the one that matters most — so it is reported
+			// like any other failure instead of leaving the page on "running…" with no reason given.
+			run()
+				.catch((error) => {
+					results.push(`FAIL the harness stopped: ${(error && error.message) || error}`);
+				})
+				.then(render);
+		</script>
+	</body>
+</html>

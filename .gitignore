@@ -43,3 +43,13 @@ deployment/lab/.env.lab
 .claude/pane_8080.py
 .claude/proof_proxy.py
 .claude/sp_proxy.py
+
+# A scratch copy of a form script, written while one is being edited and superseded the
+# moment it is checked. The pattern is a whole filename, not a directory: nothing the app
+# loads can match it.
+smartprocess_logistics/public/js/*.candidate
+
+# The probes run against one particular environment — one reads a file on the operator's
+# desktop, another drives the development site on its own port. They are tools on this
+# machine, not tests a checkout can run.
+deployment/lab/probe_*.py

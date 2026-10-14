@@ -1,6 +1,6 @@
 """Requirement, shortage and excess arithmetic, including returns and fractions."""
 
-from smartprocess_logistics.tests.base import UnitTestCase
+import dataclasses
 
 from smartprocess_logistics.core.quantities import (
 	CODE_NEGATIVE_REGISTERED,
@@ -15,6 +15,7 @@ from smartprocess_logistics.core.quantities import (
 	required_units,
 	row_coverage,
 )
+from smartprocess_logistics.tests.base import UnitTestCase
 
 
 class TestRequiredUnits(UnitTestCase):
@@ -154,7 +155,8 @@ class TestRowCoverage(UnitTestCase):
 	def test_coverage_is_frozen(self):
 		coverage = row_coverage("row-1", "ITEM-1", 10, 6)
 
-		with self.assertRaises(Exception):
+		# The exact exception, not `Exception`, for the reason `test_assignment` gives.
+		with self.assertRaises(dataclasses.FrozenInstanceError):
 			coverage.registered = 10
 
 

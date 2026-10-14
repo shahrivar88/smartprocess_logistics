@@ -33,7 +33,12 @@ guard, and it is the one that was doing the work all along.
 
 import frappe
 
-from smartprocess_logistics.core.defaults import DEFAULT_DELIMITERS, DEFAULT_ITEM_MARKERS
+from smartprocess_logistics.core import scan
+from smartprocess_logistics.core.defaults import (
+	DEFAULT_DELIMITERS,
+	DEFAULT_ITEM_MARKERS,
+	DEFAULT_NEXT_ROW_COMMAND,
+)
 from smartprocess_logistics.core.normalization import NORMALIZATION_VERSION
 
 SETTINGS_DOCTYPE = "Logistics Settings"
@@ -74,6 +79,32 @@ def sync_normalization_version():
 	return True
 
 
+def sync_next_row_command():
+	"""Give a site the scan window's next-column command, if it does not have one yet.
+
+	This exists for one moment: the migrate that adds the field to a site that already has a
+	settings row. A new column arrives empty — Frappe does not write a field's default into rows
+	that already exist — and the command is a **required** value with a rule behind it, so without
+	this a site would migrate into a settings row that its own validation refuses to save.
+
+	It is written only when empty, so the two things it must never do are both impossible: it
+	cannot overwrite a command an administrator chose, and it cannot put `**` back after somebody
+	deliberately changed it. An administrator cannot empty the field through the form — the rule in
+	`core.scan` refuses that — so "empty" only ever means "this column was just added".
+
+	Returns whether it wrote, so a caller can log the transition. Idempotent.
+	"""
+	settings = frappe.get_single(SETTINGS_DOCTYPE)
+
+	if (settings.get(scan.FIELDNAME) or "").strip():
+		return False
+
+	settings.next_row_command = DEFAULT_NEXT_ROW_COMMAND
+	settings.save()
+
+	return True
+
+
 def seed_settings():
 	"""Record the install timestamp, and fill the seed tables on the first install only.
 
@@ -84,17 +115,13 @@ def seed_settings():
 	if settings.installed_on:
 		return False
 
-	seeded = False
-
 	if not settings.get("delimiters"):
 		for label, delimiter in DEFAULT_DELIMITERS:
 			settings.append("delimiters", {"delimiter": delimiter, "enabled": 1, "label": label})
-		seeded = True
 
 	if not settings.get("item_markers"):
 		for label, pattern in DEFAULT_ITEM_MARKERS:
 			settings.append("item_markers", {"enabled": 1, "label": label, "pattern": pattern})
-		seeded = True
 
 	# Written last, on purpose. It is the marker that says the install finished, so a failure
 	# anywhere above leaves it empty and the next `after_migrate` repairs the site instead of

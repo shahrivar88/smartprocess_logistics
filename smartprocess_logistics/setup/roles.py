@@ -10,11 +10,25 @@ no DocPerm carries `if_owner`, so an Editor may correct a colleague's registrati
 
 import frappe
 
-VIEWER = "Logistics Serial Viewer"
-EDITOR = "Logistics Serial Editor"
-MANAGER = "Logistics Serial Manager"
+from smartprocess_logistics.core.authz import (
+	ROLE_ARCHIVIST as ARCHIVIST,
+)
+from smartprocess_logistics.core.authz import (
+	ROLE_EDITOR as EDITOR,
+)
+from smartprocess_logistics.core.authz import (
+	ROLE_MANAGER as MANAGER,
+)
+from smartprocess_logistics.core.authz import (
+	ROLE_VIEWER as VIEWER,
+)
 
-ROLES = (VIEWER, EDITOR, MANAGER)
+# The four roles, and the names come from `core.authz` rather than being written here a second
+# time: that module is what decides with them, so a second spelling of one would be a role the app
+# checks for and never creates. The fourth is the only one that is not a level — it grants nothing
+# on any DocType, and the one endpoint that needs it also needs a Manager level
+# (`core.authz.ENDPOINT_ROLES` says why).
+ROLES = (VIEWER, EDITOR, MANAGER, ARCHIVIST)
 
 
 def ensure_roles():

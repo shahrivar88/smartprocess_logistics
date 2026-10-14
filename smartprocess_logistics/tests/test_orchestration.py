@@ -9,10 +9,9 @@ are database guarantees listed in `test_orchestration.py`'s `NEEDS_A_DATABASE` n
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from smartprocess_logistics.core import normalization
-from smartprocess_logistics.core import session as session_rules
+from smartprocess_logistics.core import authz, normalization
 from smartprocess_logistics.core.authz import (
 	ROLE_EDITOR,
 	ROLE_MANAGER,
@@ -26,26 +25,19 @@ from smartprocess_logistics.core.orchestration import (
 	CODE_GATEWAY_MISSING,
 	CODE_INVOICE_CHANGED,
 	CODE_NO_SUBMISSIONS,
-	CODE_PAYLOAD_CHANGED,
 	CODE_ROW_UNKNOWN,
-	CONFIRMATION_STEPS,
 	LOCK_ORDER,
 	REWRITE_STEPS,
-	ConfirmationPlan,
 	OrchestrationError,
 	Step,
-	build_confirmation_plan,
+	build_append_plan,
 	build_rewrite_plan,
 	check_lock_order,
-	existing_from_rows,
-	is_retryable,
 	lock_order_documentation,
-	payload_hash,
-	run_confirmation,
 	run_rewrite,
 )
-from smartprocess_logistics.core.session import PREPARED, ImportSession
 from smartprocess_logistics.core.validation import (
+	CODE_ALREADY_REGISTERED,
 	CODE_DUPLICATE_IN_ROW,
 	CODE_EXCESS_QUANTITY,
 	ExistingAssignment,
@@ -62,7 +54,7 @@ NEEDS_A_DATABASE = (
 )
 
 NOW = datetime(2026, 10, 12, 18, 0)
-ALPHA = InvoiceRef(name="IN-260013", company="Alpha")
+ALPHA = InvoiceRef(name="IN-260013", company="Alpha", docstatus=1)
 EDITOR = Principal(user="editor@example.com", roles=frozenset({ROLE_EDITOR}))
 MANAGER = Principal(user="manager@example.com", roles=frozenset({ROLE_MANAGER}))
 LIMITED = Principal(
@@ -71,8 +63,8 @@ LIMITED = Principal(
 	companies=frozenset({"Beta"}),
 )
 
-ROW_1 = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2)
-ROW_2 = InvoiceRow(row_key="row-2", item_code="ITEM-2", invoiced_qty=1)
+ROW_1 = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2, serial_required=True)
+ROW_2 = InvoiceRow(row_key="row-2", item_code="ITEM-2", invoiced_qty=1, serial_required=True)
 
 
 @dataclass
@@ -81,15 +73,17 @@ class FakeGateway:
 
 	invoice: InvoiceRef = ALPHA
 	rows: tuple = (ROW_1, ROW_2)
-	stored_session: ImportSession = None
 	existing: tuple = ()
 	fail_on: str = None
-	session_gone: bool = False
 	calls: list = field(default_factory=list)
 	written: list = field(default_factory=list)
 	deleted_rows: list = field(default_factory=list)
 	applied: list = field(default_factory=list)
 	serial_requests: tuple = ()
+	# What each read of the stored assignments was asked for: `True` means it was taken as a
+	# locking read, which is the difference between the count the capacity rule decides on and
+	# whatever the transaction's view happened to hold.
+	existing_reads: list = field(default_factory=list)
 
 	def _record(self, name):
 		self.calls.append(name)
@@ -99,11 +93,6 @@ class FakeGateway:
 
 	def open_transaction(self):
 		self._record("open_transaction")
-
-	def lock_session(self, token):
-		self._record("lock_session")
-
-		return None if self.session_gone else self.stored_session
 
 	def lock_invoice(self, name):
 		self._record("lock_invoice")
@@ -115,8 +104,9 @@ class FakeGateway:
 
 		return tuple(self.rows)
 
-	def read_existing(self, invoice_name):
+	def read_existing(self, invoice_name, for_update=False):
 		self._record("read_existing")
+		self.existing_reads.append(for_update)
 
 		return tuple(self.existing)
 
@@ -150,28 +140,6 @@ class FakeGateway:
 
 		return tuple(f"LSA-{index}" for index in range(len(values)))
 
-	def mark_session_applied(self, name, applied_at, summary):
-		self._record("mark_session_applied")
-		self.applied.append((name, applied_at, summary))
-
-		return True
-
-
-def prepared_session(**overrides):
-	values = {
-		"name": "LIS-2026-0001",
-		"token": "token-value",
-		"status": PREPARED,
-		"owner": "editor@example.com",
-		"company": "Alpha",
-		"sales_invoice": "IN-260013",
-		"payload_hash": "hash-value",
-		"expires_at": NOW + timedelta(minutes=10),
-	}
-	values.update(overrides)
-
-	return ImportSession(**values)
-
 
 def rewrite(rows=(ROW_1, ROW_2), submissions=(("row-1", "A1"),), **overrides):
 	arguments = {
@@ -186,6 +154,80 @@ def rewrite(rows=(ROW_1, ROW_2), submissions=(("row-1", "A1"),), **overrides):
 	return build_rewrite_plan(**arguments)
 
 
+def append(rows=(ROW_1, ROW_2), row_key="row-1", serials=("A1",), **overrides):
+	"""Serials added to one row — the shape the scan station's endpoints build."""
+	arguments = {
+		"invoice": ALPHA,
+		"rows": rows,
+		"existing": (),
+		"row_key": row_key,
+		"serials": serials,
+		"principal": EDITOR,
+	}
+	arguments.update(overrides)
+
+	return build_append_plan(**arguments)
+
+
+class TestAppendBatch(UnitTestCase):
+	"""A row's labels written together: what makes a batch different from a loop of single adds.
+
+	A scan station sends one row's waiting labels in one request. The point of that is not speed
+	but *one answer for one row*: a batch the validator refuses writes nothing at all, so a row
+	cannot end up holding the first half of what an operator asked for while a failure is reported
+	about the second half. These are the two halves of that promise.
+	"""
+
+	def test_every_label_of_an_accepted_batch_is_inserted(self):
+		wide = (InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=3, serial_required=True),)
+		gateway = FakeGateway(rows=wide)
+		outcome = run_rewrite(append(rows=wide, serials=("B1", "B2", "B3")), gateway)
+
+		self.assertEqual(outcome.accepted, 3)
+		self.assertEqual([item.normalized_serial for item in gateway.written], ["b1", "b2", "b3"])
+
+	def test_a_duplicate_inside_the_batch_refuses_the_whole_batch(self):
+		"""Not the duplicate alone: a batch is accepted whole or refused whole."""
+		gateway = FakeGateway()
+
+		with self.assertRaises(OrchestrationError) as caught:
+			run_rewrite(append(serials=("D1", "D1")), gateway)
+
+		self.assertEqual(caught.exception.code, CODE_DUPLICATE_IN_ROW)
+		self.assertEqual(gateway.written, [], "nothing is written when the batch is refused")
+
+	def test_a_label_already_on_the_invoice_refuses_the_whole_batch(self):
+		gateway = FakeGateway(existing=(ExistingAssignment(row_key="row-1", normalized_serial="a0"),))
+
+		with self.assertRaises(OrchestrationError) as caught:
+			run_rewrite(append(serials=("NEW", "A0")), gateway)
+
+		self.assertEqual(caught.exception.code, CODE_ALREADY_REGISTERED)
+		self.assertEqual(gateway.written, [])
+
+	def test_a_batch_past_the_row_quantity_refuses_the_whole_batch(self):
+		"""The quantity limit, applied to the labels in hand rather than one at a time."""
+		gateway = FakeGateway()
+
+		with self.assertRaises(OrchestrationError) as caught:
+			run_rewrite(append(serials=("Q1", "Q2", "Q3")), gateway)
+
+		self.assertEqual(caught.exception.code, CODE_EXCESS_QUANTITY)
+		self.assertEqual(gateway.written, [])
+
+	def test_a_batch_never_names_a_row_to_replace(self):
+		"""The whole reason this is not `set_row_serials`: an append deletes nothing."""
+		plan = append(serials=("B1", "B2"))
+
+		self.assertEqual(plan.only_rows, ())
+
+	def test_an_empty_batch_is_refused(self):
+		with self.assertRaises(OrchestrationError) as caught:
+			append(serials=())
+
+		self.assertEqual(caught.exception.code, CODE_NO_SUBMISSIONS)
+
+
 class TestLockOrder(UnitTestCase):
 	def test_the_documented_order_has_four_locks(self):
 		self.assertEqual(len(LOCK_ORDER), 4)
@@ -193,7 +235,6 @@ class TestLockOrder(UnitTestCase):
 
 	def test_the_declared_plans_follow_the_order(self):
 		self.assertTrue(check_lock_order(tuple(Step(kind) for kind in REWRITE_STEPS)))
-		self.assertTrue(check_lock_order(tuple(Step(kind) for kind in CONFIRMATION_STEPS)))
 
 	def test_an_inverted_order_is_refused(self):
 		bad = (Step("lock_invoice"), Step("lock_session"))
@@ -209,9 +250,6 @@ class TestLockOrder(UnitTestCase):
 
 	def test_the_rewrite_takes_the_invoice_lock_first(self):
 		self.assertEqual(REWRITE_STEPS[0], "lock_invoice")
-
-	def test_the_confirmation_takes_the_session_lock_first(self):
-		self.assertEqual(CONFIRMATION_STEPS[0], "lock_session")
 
 
 class TestBuildRewritePlan(UnitTestCase):
@@ -248,6 +286,82 @@ class TestBuildRewritePlan(UnitTestCase):
 		self.assertTrue(rewrite(principal=MANAGER).invoice_name)
 
 
+class TestBuildAppendPlan(UnitTestCase):
+	"""One serial added to one row: the rule the scan station stands on.
+
+	The station writes what a barcode scanner produced, once per label, into a row that may
+	already hold labels this operator never saw. Everything that makes that safe is here: the row
+	is added to and never replaced, the quantity rule still applies, and a duplicate is refused
+	rather than written over.
+	"""
+
+	def test_an_append_replaces_nothing(self):
+		plan = append()
+
+		self.assertEqual(plan.only_rows, ())
+		self.assertEqual(plan.submissions, (("row-1", "A1"),))
+
+	def test_an_append_keeps_every_label_the_row_already_has(self):
+		gateway = FakeGateway(existing=(ExistingAssignment(row_key="row-1", normalized_serial="b7"),))
+		outcome = run_rewrite(append(), gateway)
+
+		self.assertEqual(outcome.accepted, 1)
+		self.assertEqual(gateway.deleted_rows, [])
+		self.assertEqual(outcome.deleted, 0)
+
+	def test_two_operators_scanning_the_same_row_end_with_both_labels(self):
+		"""The reason this endpoint exists at all.
+
+		A replace would lose one of the two labels. An append cannot: the second request reads the
+		row under the invoice lock — which is what `run_rewrite` takes before it reads — and adds
+		to what the first one wrote. Neither request deletes anything.
+		"""
+		first = FakeGateway()
+		run_rewrite(append(serials=("AAA111",)), first)
+
+		second = FakeGateway(existing=(ExistingAssignment(row_key="row-1", normalized_serial="aaa111"),))
+		outcome = run_rewrite(append(serials=("BBB222",)), second)
+
+		self.assertEqual(outcome.accepted, 1)
+		self.assertEqual(len(second.written), 1)
+		self.assertEqual(second.deleted_rows, [])
+		self.assertEqual(outcome.deleted, 0)
+
+	def test_an_append_over_the_rows_quantity_is_refused(self):
+		# ROW_2 invoices one unit, and one is already registered against it.
+		gateway = FakeGateway(existing=(ExistingAssignment(row_key="row-2", normalized_serial="b1"),))
+
+		with self.assertRaises(OrchestrationError) as caught:
+			run_rewrite(append(row_key="row-2", serials=("B2",)), gateway)
+
+		self.assertEqual(caught.exception.code, CODE_EXCESS_QUANTITY)
+		self.assertEqual(gateway.written, [])
+
+	def test_a_label_already_on_the_row_is_refused(self):
+		gateway = FakeGateway(existing=(ExistingAssignment(row_key="row-1", normalized_serial="a1"),))
+
+		with self.assertRaises(OrchestrationError):
+			run_rewrite(append(serials=("A1",)), gateway)
+
+		self.assertEqual(gateway.written, [])
+
+	def test_an_append_to_a_row_the_invoice_does_not_have_is_refused(self):
+		with self.assertRaises(OrchestrationError) as caught:
+			append(row_key="row-9")
+
+		self.assertEqual(caught.exception.code, CODE_ROW_UNKNOWN)
+
+	def test_an_append_to_a_missing_invoice_is_refused(self):
+		with self.assertRaises(OrchestrationError) as caught:
+			append(invoice=None)
+
+		self.assertEqual(caught.exception.code, CODE_INVOICE_CHANGED)
+
+	def test_an_append_from_another_company_is_refused(self):
+		with self.assertRaises(AuthorizationError):
+			append(principal=LIMITED)
+
+
 class TestRunRewrite(UnitTestCase):
 	def test_an_import_writes_in_order_and_deletes_nothing(self):
 		# `rewrite()` names no replaced row, which is the shape `confirm_import` builds. An
@@ -264,14 +378,31 @@ class TestRunRewrite(UnitTestCase):
 				"open_transaction",
 				"lock_invoice",
 				"read_rows",
-				"read_existing",
 				"lock_serials",
+				"read_existing",
 				"find_or_create_serials",
 				"insert_assignments",
 			],
 		)
 		self.assertEqual(gateway.deleted_rows, [])
 		self.assertEqual(outcome.deleted, 0)
+
+	def test_the_count_the_cap_decides_on_is_read_after_the_locks_and_locked_itself(self):
+		"""A consistent read here would answer with a view taken before another writer committed.
+
+		The two halves of this are one decision: the read has to happen under the invoice lock —
+		otherwise it is a read of nothing — and it has to be a locking read, or it is a read of what
+		the row held when this transaction began. Measured on a real site: with a plain read, a
+		request that had read a row's third place, waited while another request took it, and then
+		wrote was let through the cap on its older count.
+		"""
+		gateway = FakeGateway()
+		run_rewrite(rewrite(), gateway)
+
+		self.assertEqual(gateway.existing_reads, [True])
+		self.assertLess(gateway.calls.index("lock_invoice"), gateway.calls.index("read_existing"))
+		self.assertLess(gateway.calls.index("lock_serials"), gateway.calls.index("read_existing"))
+		self.assertLess(gateway.calls.index("read_existing"), gateway.calls.index("insert_assignments"))
 
 	def test_an_import_keeps_what_the_row_already_has(self):
 		gateway = FakeGateway(existing=(ExistingAssignment(row_key="row-1", normalized_serial="a0"),))
@@ -321,13 +452,31 @@ class TestRunRewrite(UnitTestCase):
 		self.assertEqual(gateway.deleted_rows, [])
 
 	def test_a_changed_company_stops_the_write(self):
-		gateway = FakeGateway(invoice=InvoiceRef(name=ALPHA.name, company="Beta"))
+		gateway = FakeGateway(invoice=InvoiceRef(name=ALPHA.name, company="Beta", docstatus=1))
 
 		with self.assertRaises(OrchestrationError) as caught:
 			run_rewrite(rewrite(), gateway)
 
 		self.assertEqual(caught.exception.code, CODE_COMPANY_CHANGED)
 		self.assertEqual(gateway.written, [])
+
+	def test_an_invoice_cancelled_while_the_request_waited_stops_the_write(self):
+		"""The lifecycle as it is *now*, read under the lock.
+
+		The endpoint decided against the invoice as it was a moment ago. If the site cancelled it
+		in between — the case a lock exists for — the locked read is the answer that counts, and
+		the write must not happen. A fake cannot prove MariaDB's lock; it can prove that this plan
+		reads the value the lock returned and refuses on it, which is what the real one does too.
+		"""
+		gateway = FakeGateway(invoice=InvoiceRef(name=ALPHA.name, company="Alpha", docstatus=2))
+
+		with self.assertRaises(OrchestrationError) as caught:
+			run_rewrite(rewrite(), gateway)
+
+		self.assertEqual(caught.exception.code, CODE_INVOICE_CHANGED)
+		self.assertEqual(caught.exception.message, authz.REFUSAL_INVOICE_CANCELLED)
+		self.assertEqual(gateway.written, [])
+		self.assertEqual(gateway.deleted_rows, [])
 
 	def test_a_missing_invoice_stops_the_write(self):
 		gateway = FakeGateway(invoice=None)
@@ -393,7 +542,9 @@ class TestRunRewrite(UnitTestCase):
 			run_rewrite(rewrite(only_rows=("row-1",)), gateway)
 
 		self.assertIn("delete_row_assignments", gateway.calls)
-		self.assertNotIn("mark_session_applied", gateway.calls)
+		# Nothing in this path talks to a session any more: the claim that made a preview
+		# applyable once went with the endpoint that applied it.
+		self.assertFalse([call for call in gateway.calls if "session" in call], gateway.calls)
 
 	def test_a_gateway_missing_a_method_is_refused_before_it_starts(self):
 		class Partial:
@@ -437,134 +588,3 @@ class TestRunRewrite(UnitTestCase):
 			gateway.calls.index("delete_row_assignments"), gateway.calls.index("insert_assignments")
 		)
 		self.assertEqual(sorted(written.normalized_serial for written in gateway.written), ["a1", "a9"])
-
-
-class TestRunConfirmation(UnitTestCase):
-	def plan(self, gateway, *, owner=None, payload_hash="hash-value"):
-		rewrite_plan = rewrite()
-
-		return build_confirmation_plan(
-			session=gateway.stored_session,
-			rewrite=rewrite_plan,
-			owner=owner or gateway.stored_session.owner,
-			payload_hash=payload_hash,
-			now=NOW,
-		)
-
-	def test_a_prepared_session_is_applied(self):
-		gateway = FakeGateway(stored_session=prepared_session())
-		outcome = run_confirmation(self.plan(gateway), gateway)
-
-		self.assertTrue(outcome.accepted)
-		self.assertEqual(gateway.applied[0][0], "LIS-2026-0001")
-		self.assertEqual(gateway.applied[0][1], NOW)
-		self.assertIn("mark_session_applied", gateway.calls)
-
-	def test_the_session_is_locked_before_the_invoice(self):
-		gateway = FakeGateway(stored_session=prepared_session())
-		run_confirmation(self.plan(gateway), gateway)
-
-		self.assertLess(gateway.calls.index("lock_session"), gateway.calls.index("lock_invoice"))
-
-	def test_an_applied_session_cannot_be_confirmed_again(self):
-		gateway = FakeGateway(
-			stored_session=prepared_session(status=session_rules.APPLIED),
-		)
-
-		with self.assertRaises(session_rules.SessionError) as caught:
-			run_confirmation(self.plan(gateway), gateway)
-
-		self.assertEqual(caught.exception.code, session_rules.CODE_REPLAY)
-		self.assertEqual(gateway.written, [])
-
-	def test_an_expired_session_cannot_be_confirmed(self):
-		gateway = FakeGateway(stored_session=prepared_session(expires_at=NOW))
-
-		with self.assertRaises(session_rules.SessionError) as caught:
-			run_confirmation(self.plan(gateway), gateway)
-
-		self.assertEqual(caught.exception.code, session_rules.CODE_EXPIRED)
-		self.assertEqual(gateway.written, [])
-
-	def test_a_session_that_vanished_is_refused(self):
-		gateway = FakeGateway(stored_session=prepared_session(), session_gone=True)
-
-		with self.assertRaises(session_rules.SessionError) as caught:
-			run_confirmation(self.plan(gateway), gateway)
-
-		self.assertEqual(caught.exception.code, session_rules.CODE_NOT_FOUND)
-
-	def test_another_users_session_is_refused(self):
-		gateway = FakeGateway(stored_session=prepared_session(owner="someone@example.com"))
-
-		with self.assertRaises(session_rules.SessionError) as caught:
-			run_confirmation(self.plan(gateway, owner="editor@example.com"), gateway)
-
-		self.assertEqual(caught.exception.code, session_rules.CODE_NOT_OWNED)
-		self.assertEqual(gateway.written, [])
-
-	def test_a_changed_payload_is_refused(self):
-		# The hash the caller computed from the payload it just read does not match the hash the
-		# session recorded, which is what catches a payload field edited after the fact.
-		gateway = FakeGateway(stored_session=prepared_session(payload_hash="recorded-hash"))
-
-		with self.assertRaises(session_rules.SessionError) as caught:
-			run_confirmation(self.plan(gateway, payload_hash="recomputed-hash"), gateway)
-
-		self.assertEqual(caught.exception.code, session_rules.CODE_PAYLOAD_CHANGED)
-
-	def test_the_hash_is_computed_the_same_way_the_session_computes_it(self):
-		encoded = '{"submissions": []}'
-
-		self.assertEqual(payload_hash(encoded), payload_hash(encoded))
-		self.assertNotEqual(payload_hash(encoded), payload_hash(encoded + " "))
-
-	def test_nothing_is_marked_applied_when_the_rewrite_fails(self):
-		gateway = FakeGateway(stored_session=prepared_session(), fail_on="insert_assignments")
-
-		with self.assertRaises(RuntimeError):
-			run_confirmation(self.plan(gateway), gateway)
-
-		self.assertEqual(gateway.applied, [])
-
-	def test_the_session_is_never_marked_claimed(self):
-		# The claim lives in the transaction and is never written; that is why a stored
-		# `Claimed` row cannot be produced by this design.
-		gateway = FakeGateway(stored_session=prepared_session())
-		run_confirmation(self.plan(gateway), gateway)
-
-		self.assertNotIn("mark_session_claimed", gateway.calls)
-		self.assertEqual(gateway.applied[0][0], "LIS-2026-0001")
-
-
-class TestRetryRules(UnitTestCase):
-	def test_a_validation_failure_is_not_retryable(self):
-		self.assertFalse(is_retryable(OrchestrationError(CODE_PAYLOAD_CHANGED, "x")))
-		self.assertFalse(is_retryable(OrchestrationError(CODE_NO_SUBMISSIONS, "x")))
-		self.assertFalse(is_retryable(OrchestrationError(CODE_COMPANY_CHANGED, "x")))
-		self.assertFalse(is_retryable(OrchestrationError(CODE_ROW_UNKNOWN, "x")))
-
-	def test_a_contention_failure_is_retryable(self):
-		self.assertTrue(is_retryable(OrchestrationError(CODE_INVOICE_CHANGED, "x")))
-		self.assertTrue(is_retryable(TimeoutError("lock wait timeout")))
-
-	def test_an_expired_session_is_retryable_and_a_replay_is_not(self):
-		self.assertTrue(is_retryable(session_rules.SessionError(session_rules.CODE_EXPIRED, "x")))
-		self.assertFalse(is_retryable(session_rules.SessionError(session_rules.CODE_REPLAY, "x")))
-
-	def test_an_unknown_error_is_treated_as_retryable(self):
-		self.assertTrue(is_retryable(RuntimeError("connection reset")))
-
-
-class TestExistingFromRows(UnitTestCase):
-	def test_stored_rows_become_existing_assignments(self):
-		built = existing_from_rows(
-			[
-				{"sales_invoice_item": "row-1", "normalized_serial": "a1"},
-				{"sales_invoice_item": "row-1", "normalized_serial": "a2"},
-			]
-		)
-
-		self.assertEqual(len(built), 2)
-		self.assertEqual(built[0].row_key, "row-1")
-		self.assertEqual(built[1].normalized_serial, "a2")

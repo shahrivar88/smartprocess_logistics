@@ -51,9 +51,14 @@ class SheetLimits:
 	"""The ceilings a workbook has to stay under."""
 
 	max_sheets: int = 20
+	# The content limits count nonempty cells and rows: a worksheet with no data in it is not
+	# refused for the size of its formatting, and blank rows are neither kept nor counted.
 	max_rows: int = 5000
 	max_columns: int = 64
 	max_cells: int = 200_000
+	# Every cell the reader hands over, blank or not: the bound on the *work* of finding the
+	# data in a worksheet somebody formatted to the bottom of the sheet.
+	max_scanned_cells: int = 1_000_000
 	max_text_length: int = 256
 	# The archive preflight measures the declared uncompressed size, and the reader refuses to
 	# open anything that declares more than this. The row, column and cell limits stop the read
@@ -181,6 +186,13 @@ def build_sheet_rows(raw_sheets, limits=None):
 
 	Each row is an iterable of `(value, data_type)` pairs. Every limit and every refusal is
 	applied here, so a caller that has an `openpyxl` workbook only has to produce those pairs.
+
+	**An empty row is not content.** It is not kept, counted, or refused for, and it does not
+	make a worksheet that is mostly formatting look bigger than the data it holds — a file an
+	operator formatted to the bottom of the sheet is read for what is in it. What bounds the work
+	of *finding* the data is `max_scanned_cells`, which counts every cell the reader hands over.
+	The row number a `SheetRow` carries is still the number it had in the sheet, so a message
+	about a row names the row an operator would look for.
 	"""
 	limits = limits or SheetLimits()
 	raw_sheets = tuple(raw_sheets)
@@ -194,38 +206,26 @@ def build_sheet_rows(raw_sheets, limits=None):
 	rows = []
 	total_cells = 0
 	numeric_cells = 0
+	nonempty_rows = 0
+	scanned_cells = 0
 
 	for sheet_name, sheet_rows in raw_sheets:
 		for row_number, raw_cells in enumerate(sheet_rows, start=1):
-			if row_number > limits.max_rows:
-				raise SheetError(
-					CODE_TOO_MANY_ROWS,
-					f"تعداد ردیف‌های شیت بیش از {limits.max_rows} است.",
-					sheet_name,
-					row_number,
-				)
-
 			raw_cells = tuple(raw_cells)
 
-			if len(raw_cells) > limits.max_columns:
-				raise SheetError(
-					CODE_TOO_MANY_COLUMNS,
-					f"تعداد ستون‌های شیت بیش از {limits.max_columns} است.",
-					sheet_name,
-					row_number,
-				)
-
-			total_cells += len(raw_cells)
-
-			if total_cells > limits.max_cells:
+			if scanned_cells + len(raw_cells) > limits.max_scanned_cells:
 				raise SheetError(
 					CODE_TOO_MANY_CELLS,
-					f"تعداد کل سلول‌ها بیش از {limits.max_cells} است.",
+					f"کتاب‌کار برای خواندن بیش از حد بزرگ است؛ بیش از "
+					f"{limits.max_scanned_cells} سلول (شامل خالی‌ها) دیده شد.",
 					sheet_name,
 					row_number,
 				)
 
+			scanned_cells += len(raw_cells)
+
 			cells = []
+			filled = 0
 
 			for column, (value, data_type) in enumerate(raw_cells, start=1):
 				text, was_numeric = cell_text(
@@ -237,7 +237,39 @@ def build_sheet_rows(raw_sheets, limits=None):
 					column=column,
 				)
 				numeric_cells += 1 if was_numeric else 0
+				filled += 1 if text else 0
 				cells.append(CellValue(text=text, column=column, was_numeric=was_numeric))
+
+			if not filled:
+				continue
+
+			if filled > limits.max_columns:
+				raise SheetError(
+					CODE_TOO_MANY_COLUMNS,
+					f"تعداد ستون‌های دارای داده بیش از {limits.max_columns} است.",
+					sheet_name,
+					row_number,
+				)
+
+			nonempty_rows += 1
+
+			if nonempty_rows > limits.max_rows:
+				raise SheetError(
+					CODE_TOO_MANY_ROWS,
+					f"تعداد ردیف‌های دارای داده بیش از {limits.max_rows} است.",
+					sheet_name,
+					row_number,
+				)
+
+			total_cells += filled
+
+			if total_cells > limits.max_cells:
+				raise SheetError(
+					CODE_TOO_MANY_CELLS,
+					f"تعداد کل سلول‌های دارای داده بیش از {limits.max_cells} است.",
+					sheet_name,
+					row_number,
+				)
 
 			rows.append(SheetRow(sheet=sheet_name, number=row_number, cells=tuple(cells)))
 
@@ -247,6 +279,31 @@ def build_sheet_rows(raw_sheets, limits=None):
 		cells=total_cells,
 		numeric_cells=numeric_cells,
 	)
+
+
+def column_major_texts(rows):
+	"""Every nonempty cell of an accepted workbook, as text, read column by column.
+
+	**Column by column, top to bottom** — `A1, A2, A3 …, B1, B2, B3 …` — and never row by row.
+	That is the order the serial intake reads a file in, and it is the order the operator's own
+	workbook is arranged in when its first row carries the commands each column belongs to.
+	Nothing is decided here: no cell is interpreted, no row is chosen, and a cell that holds
+	several separator-separated values is still one text. What reads commands and splits them is
+	the one intake in the window, so a file is read the same way a paste is.
+
+	A cell is nonempty when its text is not blank. Blank cells — `None`, an empty string, or
+	whitespace — are not returned, not counted, and never become a serial.
+	"""
+	columns = sorted({cell.column for row in rows for cell in row.cells if cell.text})
+	texts = []
+
+	for column in columns:
+		for row in rows:
+			for cell in row.cells:
+				if cell.column == column and cell.text:
+					texts.append(cell.text)
+
+	return tuple(texts)
 
 
 def iter_workbook_sheets(workbook):

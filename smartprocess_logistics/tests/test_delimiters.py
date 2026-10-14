@@ -1,7 +1,5 @@
 """Delimiter interpretation, validation, ordering and splitting."""
 
-from smartprocess_logistics.tests.base import UnitTestCase
-
 from smartprocess_logistics.core.defaults import DEFAULT_DELIMITERS, DEFAULT_ITEM_MARKERS
 from smartprocess_logistics.core.delimiters import (
 	CODE_ALPHANUMERIC,
@@ -24,6 +22,8 @@ from smartprocess_logistics.core.delimiters import (
 	split_typed_list,
 	validate_delimiter,
 )
+from smartprocess_logistics.tests.base import UnitTestCase
+from smartprocess_logistics.tests.schema_checks import APP_ROOT
 
 
 class TestInterpretDelimiter(UnitTestCase):
@@ -65,6 +65,31 @@ class TestInterpretDelimiter(UnitTestCase):
 
 	def test_unknown_escape_is_left_alone(self):
 		self.assertEqual(interpret_delimiter("\\x"), "\\x")
+
+	def test_a_question_mark_in_a_delimiter_is_a_question_mark(self):
+		"""A delimiter is literal text, and that includes the characters a pattern would give meaning.
+
+		A site was found carrying `\\r?\\n` — the notation of a regular expression, "a CR if there is
+		one, then an LF" — in its settings. Nothing here reads it that way and nothing should: this
+		function has no quantifiers to give a `?` or a `*`, so the entry is the three characters CR,
+		`?`, LF and matches no text any serial can hold. The pinning matters more than the finding:
+		a delimiter is configuration, and configuration interpolated into a pattern is a
+		regexp-injection hole with a mundane name.
+		"""
+		self.assertEqual(interpret_delimiter("\\r?\\n"), "\r?\n")
+		self.assertEqual(len(interpret_delimiter("\\r?\\n")), 3)
+		self.assertEqual(interpret_delimiter("*"), "*")
+		self.assertEqual(interpret_delimiter(".+"), ".+")
+
+	def test_the_odd_entry_cannot_stand_in_for_a_real_line_break(self):
+		"""`\\r?\\n` and `\\r\\n` are different strings, so the real one still ends the line."""
+		delimiters = DelimiterSet.of(("\\r?\\n", "\\r\\n"))
+
+		self.assertEqual(delimiters.as_list(), ["\r?\n", "\r\n"])
+		self.assertEqual(split_tokens("A\r\nB", delimiters), ["A", "B"])
+		# The odd entry matches its own three characters and nothing else: this text is the only
+		# shape it can split, and it is a shape no spreadsheet, file or scanner produces.
+		self.assertEqual(split_tokens("A\r?\nB", delimiters), ["A", "B"])
 
 	def test_non_text_is_refused(self):
 		with self.assertRaises(DelimiterError) as caught:
@@ -355,3 +380,40 @@ class TestTheShippedDefaults(UnitTestCase):
 
 	def stored_delimiters(self):
 		return [stored for _, stored in DEFAULT_DELIMITERS]
+
+
+class TestTheEndpointServesThem(UnitTestCase):
+	"""The wiring: two values in, one rule applied, nothing decided here.
+
+	A decision taken in an endpoint is a decision no database-free test can reach, which is the
+	split this app keeps everywhere else. The rule lives in `core.delimiters`; the endpoint is the
+	line that hands it this site's configuration.
+	"""
+
+	def endpoint_source(self):
+
+		return (APP_ROOT / "smartprocess_logistics" / "api" / "endpoints.py").read_text(encoding="utf-8")
+
+	def test_the_endpoint_applies_the_rule_and_does_not_reimplement_it(self):
+		source = self.endpoint_source()
+		start = source.index("def _intake_rules(gateway):")
+		body = source[start : source.index("\ndef ", start + 1)]
+
+		self.assertIn("served_delimiters(", body)
+		self.assertNotIn("TYPED_SEPARATORS", body)
+		self.assertNotIn("except", body)
+		self.assertNotIn("DelimiterError", body)
+
+	def test_the_window_is_told_the_length_this_site_allows(self):
+		source = self.endpoint_source()
+		start = source.index("def _intake_rules(gateway):")
+		body = source[start : source.index("\ndef ", start + 1)]
+
+		self.assertIn("serial_max_length", body)
+		self.assertIn("DEFAULT_MAX_LENGTH", body)
+
+	def test_the_payload_carries_them_with_the_invoice(self):
+		"""One call, one authorization: the window already asks for this invoice."""
+		source = self.endpoint_source()
+
+		self.assertIn('"intake": _intake_rules(gateway),', source)

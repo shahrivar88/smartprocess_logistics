@@ -32,8 +32,20 @@ from frappe import _, flags
 from frappe.permissions import get_user_permissions
 from frappe.utils import now
 
-from smartprocess_logistics.core import authz, export, importer, orchestration, session as session_rules
+from smartprocess_logistics.core import (
+	authz,
+	export,
+	importer,
+)
+from smartprocess_logistics.core import (
+	session as session_rules,
+)
+from smartprocess_logistics.core import (
+	transfer as transfer_rules,
+)
 from smartprocess_logistics.core.authz import InvoiceRef
+from smartprocess_logistics.core.quantities import required_units
+from smartprocess_logistics.core.transfer import SourceSerial, TargetRow
 from smartprocess_logistics.core.validation import ExistingAssignment, InvoiceRow
 
 SESSION_DOCTYPE = "Logistics Import Session"
@@ -41,6 +53,8 @@ SERIAL_DOCTYPE = "Logistics Serial"
 ASSIGNMENT_DOCTYPE = "Logistics Serial Assignment"
 SETTINGS_DOCTYPE = "Logistics Settings"
 INVOICE_DOCTYPE = "Sales Invoice"
+TRANSFER_DOCTYPE = "Logistics Serial Transfer"
+TRANSFER_ITEM_DOCTYPE = "Logistics Serial Transfer Item"
 
 SESSION_FIELDS = (
 	"name",
@@ -58,6 +72,44 @@ SESSION_FIELDS = (
 
 ASSIGNMENT_FIELDS = ("name", "sales_invoice_item", "normalized_serial", "logistics_serial", "item_code")
 
+# The format's field list per DocType, for `insert_exported`. A doctype that is not here cannot be
+# placed, and saying so beats the old two-way conditional, which treated anything that was not a
+# serial as an assignment and inserted whichever fields that happened to match.
+EXPORTED_FIELDS = {
+	export.SERIAL_DOCTYPE: export.SERIAL_FIELDS,
+	export.ASSIGNMENT_DOCTYPE: export.ASSIGNMENT_FIELDS,
+	export.TRANSFER_DOCTYPE: export.TRANSFER_FIELDS,
+	export.TRANSFER_ITEM_DOCTYPE: export.TRANSFER_ITEM_FIELDS,
+}
+
+
+def principal_for(user):
+	"""The acting user, as `core.authz` wants them.
+
+	Module-level rather than a method because the framework hands a permission condition
+	(`permissions.py`) a bare user name and expects the same principal this app authorizes with.
+	Two builders would be two chances to disagree about what a company restriction means, and the
+	day they disagreed the Desk list and the export endpoint would give different answers for the
+	same person.
+
+	The company list is the framework's own: `User Permission` rows on `Company`, and
+	`apply_strict_user_permissions` for what their absence means. Neither is this app's policy to
+	invent.
+	"""
+	if not user or user == "Guest":
+		return authz.Principal(user="", roles=frozenset())
+
+	user_permissions = get_user_permissions(user) or {}
+	allowed = user_permissions.get("Company")
+	companies = frozenset(entry.get("doc") for entry in allowed if entry.get("doc")) if allowed else None
+
+	return authz.Principal(
+		user=user,
+		roles=frozenset(frappe.get_roles(user)),
+		companies=companies,
+		strict_companies=bool(frappe.db.get_single_value("System Settings", "apply_strict_user_permissions")),
+	)
+
 
 class FrappeGateway:
 	"""The real gateway. See the module docstring for the locking and transaction rules."""
@@ -69,23 +121,7 @@ class FrappeGateway:
 
 	def principal(self):
 		"""The acting user, as `core.authz` wants them."""
-		user = frappe.session.user
-
-		if not user or user == "Guest":
-			return authz.Principal(user="", roles=frozenset())
-
-		user_permissions = get_user_permissions(user) or {}
-		allowed = user_permissions.get("Company")
-		companies = frozenset(entry.get("doc") for entry in allowed if entry.get("doc")) if allowed else None
-
-		return authz.Principal(
-			user=user,
-			roles=frozenset(frappe.get_roles(user)),
-			companies=companies,
-			strict_companies=bool(
-				frappe.db.get_single_value("System Settings", "apply_strict_user_permissions")
-			),
-		)
+		return principal_for(frappe.session.user)
 
 	# --- transactions ------------------------------------------------------------
 
@@ -113,16 +149,234 @@ class FrappeGateway:
 	# --- reads -------------------------------------------------------------------
 
 	def read_invoice(self, name):
-		"""The invoice as stored, or `None`. The company here is what every check uses."""
+		"""The invoice as stored, or `None`. The company and the lifecycle are what every check uses.
+
+		`docstatus` is read with the company because it is the other fact a decision needs and the
+		other fact a caller must not supply: whether the site has cancelled this invoice decides
+		whether a registration may be added to it at all (`core.authz.require_live_invoice`).
+		"""
 		if not name or not frappe.db.exists(INVOICE_DOCTYPE, name):
 			return None
 
-		stored = frappe.db.get_value(INVOICE_DOCTYPE, name, ["name", "company"], as_dict=True)
+		stored = frappe.db.get_value(INVOICE_DOCTYPE, name, ["name", "company", "docstatus"], as_dict=True)
 
-		return InvoiceRef(name=stored.name, company=stored.company) if stored else None
+		if not stored:
+			return None
+
+		return InvoiceRef(name=stored.name, company=stored.company, docstatus=int(stored.docstatus or 0))
+
+	def item_facts(self, item_codes):
+		"""What the station needs about these items, in one read per chunk.
+
+		Two answers, from the same read so a column's title costs no further query:
+
+		- **Whether the item requires serials.** Read as the flag stands now, which is what the
+		  shortage report reads too, so the two cannot disagree about which columns are required.
+		  An item absent from the answer is one this site does not mark.
+		- **The model to show at the head of the column.** `Item.item_name`, which is where this
+		  site keeps it — measured rather than assumed: its invoice items carry values such as
+		  `DS-2CD2166G2-ISU (2.8mm)` there, while `crm_product_code` merely repeats the item code,
+		  no brand is set, and no item variant attribute exists. The caller falls back to the item
+		  code when this is empty, so a site that keeps its model somewhere else still gets a
+		  usable title rather than a blank one.
+		"""
+		names = tuple(sorted({code for code in item_codes if code}))
+
+		if not names:
+			return {}
+
+		facts = {}
+
+		for row in self._by_names("Item", names, ["name", "item_name", "sp_serial_required"]):
+			facts[row.get("name")] = {
+				"model": row.get("item_name") or "",
+				"serial_required": bool(row.get("sp_serial_required")),
+			}
+
+		return facts
+
+	def read_amendment(self, source_name, target_name):
+		"""Whether the target invoice is the amendment of the source, from the stored document.
+
+		One field, read on its own, because it is the fact that makes the pair a pair: two
+		unrelated invoices can carry the same item in the same company, and a transfer between
+		them would be a claim about a transaction that never happened. The rule it feeds lives in
+		`core.transfer.plan_transfer`, where a test can reach it.
+		"""
+		if not source_name or not target_name:
+			return False
+
+		return frappe.db.get_value(INVOICE_DOCTYPE, target_name, "amended_from") == source_name
+
+	def read_source_serials(self, invoice_name):
+		"""The registrations the cancelled invoice holds, in the order they were created.
+
+		`name asc` and not `creation asc`: assignment names come from the expression
+		`LSA-.YYYY.-.#####`, so name order is creation order, and it is the order
+		`export_serials` reads the same rows in. Two paths that order one table two ways are two
+		paths that pair a serial with a different row when the table is only half filled.
+
+		The identity comes from the **serial master**, not from the registration's copy of it:
+		that is the value `core.assignment.derive_assignment_values` will write on the new row,
+		and matching on the value that will be written is what keeps the plan and the write
+		describing the same serial. For every row this app ever wrote the two are equal — the
+		copy is derived and the identity is immutable — so the distinction only appears in data
+		something else wrote.
+
+		A registration whose serial master is missing is skipped rather than refused. Nothing in
+		this app can produce one (a serial is never deleted, and the assignment refuses to lose its
+		link), and a serial that is gone cannot be moved: there would be no identity to derive and
+		nothing to point the new row at.
+		"""
+		rows = tuple(
+			frappe.get_all(
+				ASSIGNMENT_DOCTYPE,
+				filters={"sales_invoice": invoice_name},
+				fields=[
+					"name",
+					"sales_invoice_item",
+					"item_code",
+					"logistics_serial",
+				],
+				order_by="name asc",
+				limit_page_length=0,
+			)
+		)
+
+		if not rows:
+			return ()
+
+		masters = {
+			row.get("name"): row
+			for row in self._by_names(
+				SERIAL_DOCTYPE,
+				tuple({row.get("logistics_serial") for row in rows if row.get("logistics_serial")}),
+				["name", "serial_no", "normalized_serial", "normalization_version"],
+			)
+		}
+		index_by_row = {row.get("name"): row.get("idx") for row in self._invoice_rows((invoice_name,))}
+		serials = []
+
+		for row in rows:
+			master = masters.get(row.get("logistics_serial"))
+
+			if not master:
+				continue
+
+			serials.append(
+				SourceSerial(
+					assignment=row.get("name"),
+					serial=master.get("serial_no") or "",
+					normalized=master.get("normalized_serial") or "",
+					item_code=row.get("item_code") or "",
+					row_key=row.get("sales_invoice_item") or "",
+					row_index=index_by_row.get(row.get("sales_invoice_item")),
+					serial_ref=master.get("name") or "",
+					version=int(master.get("normalization_version") or 0),
+				)
+			)
+
+		return tuple(serials)
+
+	def read_target_rows(self, invoice_name):
+		"""The amended invoice's item rows, each with what it can still take.
+
+		`read_rows` is the whole invoice in the invoice's own order, eligible or not, and
+		`read_existing` is what it already holds; the capacity is the row's own invoiced quantity,
+		by the same rule every write path enforces. Three facts from three reads this gateway
+		already makes for other endpoints, so the transfer cannot disagree with them about which
+		rows may receive a registration or how many fit.
+
+		The count is taken over `ExistingAssignment` objects rather than through `_count_by_row`,
+		which reads the row *dicts* the import path has in hand: those carry the invoice they
+		belong to, these do not, because they were read for one invoice and one invoice only. The
+		dictionary is keyed by the row alone, and a page of a fifty-row invoice is still one read.
+		"""
+		rows = self.read_rows(invoice_name)
+		held = {}
+
+		for existing in self.read_existing(invoice_name):
+			held[existing.row_key] = held.get(existing.row_key, 0) + 1
+
+		return tuple(
+			TargetRow(
+				row_key=row.row_key,
+				item_code=row.item_code,
+				capacity=transfer_rules.capacity_of(row.invoiced_qty),
+				serial_required=row.serial_required,
+				held=held.get(row.row_key, 0),
+				index=index,
+			)
+			for index, row in enumerate(rows, start=1)
+		)
+
+	def read_live_elsewhere(self, principal, normalized_serials, target_invoice):
+		"""Which of these identities are registered on another invoice that is not cancelled.
+
+		Not a conflict and never a refusal on its own: this app has had no site-wide uniqueness
+		rule over serial text across invoices since it began, and the three identities that are
+		already on two invoices on the operator's own site are exactly that. The answer becomes a
+		warning the operator has to acknowledge, and the acknowledgment is what the record keeps.
+
+		Restricted to the caller's companies, in the read itself. An unrestricted answer would
+		tell a restricted operator which serials another company's invoices carry, and the
+		acknowledgment prompt would be asking about rows they cannot see.
+
+		The invoices are read for their lifecycle rather than trusted to be live, because a serial
+		sitting on a *cancelled* invoice is not somewhere it is still in use — that is the whole
+		reason the source invoice's own serials are transferable.
+		"""
+		wanted = tuple(sorted({value for value in normalized_serials if value}))
+
+		if not wanted:
+			return frozenset()
+
+		companies = authz.visible_companies(principal)
+		company_filter = self._company_filter(companies)
+		pairs = []
+
+		for chunk in _chunks(wanted):
+			pairs.extend(
+				frappe.get_all(
+					ASSIGNMENT_DOCTYPE,
+					filters={"normalized_serial": ["in", chunk], **company_filter},
+					fields=["normalized_serial", "sales_invoice"],
+					limit_page_length=0,
+				)
+			)
+
+		others = {row.get("sales_invoice") for row in pairs} - {target_invoice}
+
+		if not others:
+			return frozenset()
+
+		cancelled = {
+			row.get("name")
+			for row in self._by_names(INVOICE_DOCTYPE, tuple(others), ["name", "docstatus"])
+			if int(row.get("docstatus") or 0) == authz.DOCSTATUS_CANCELLED
+		}
+
+		return frozenset(
+			row.get("normalized_serial")
+			for row in pairs
+			if row.get("sales_invoice") != target_invoice and row.get("sales_invoice") not in cancelled
+		)
 
 	def read_rows(self, invoice_name):
-		"""The invoice's item rows, in invoice order."""
+		"""The invoice's item rows, in invoice order, each with its item's eligibility.
+
+		**Every row, eligible or not, and in the invoice's own order.** Which rows may be worked on
+		is a decision for `core.eligibility`, and a reader that dropped the rest would leave the
+		caller unable to tell "this invoice has three rows and one of them cannot take serials"
+		from "this invoice has two rows" — the numbers an operator reads off a printed invoice are
+		the positions in *this* list, so the list has to be the whole invoice. It is also what lets
+		`core.validation` answer a request that names an ineligible row instead of refusing it as
+		one that does not exist.
+
+		The flag comes from the item, in one extra read per distinct item — the same read the
+		station's own status call makes, through the same method, so the window and the write path
+		cannot end up disagreeing about which rows are serial rows.
+		"""
 		rows = frappe.get_all(
 			"Sales Invoice Item",
 			filters={"parent": invoice_name, "parenttype": INVOICE_DOCTYPE},
@@ -131,23 +385,54 @@ class FrappeGateway:
 			limit_page_length=0,
 		)
 
+		facts = self.item_facts(row.item_code for row in rows)
+
 		return tuple(
-			InvoiceRow(row_key=row.name, item_code=row.item_code, invoiced_qty=row.qty) for row in rows
+			InvoiceRow(
+				row_key=row.name,
+				item_code=row.item_code,
+				invoiced_qty=row.qty,
+				serial_required=bool((facts.get(row.item_code) or {}).get("serial_required")),
+			)
+			for row in rows
 		)
 
-	def read_existing(self, invoice_name):
-		"""Every assignment already stored on the invoice."""
-		rows = frappe.get_all(
-			ASSIGNMENT_DOCTYPE,
-			filters={"sales_invoice": invoice_name},
-			fields=["sales_invoice_item", "normalized_serial"],
-			limit_page_length=0,
-		)
+	def read_existing(self, invoice_name, for_update=False):
+		"""Every assignment already stored on the invoice, as a current read when asked.
+
+		`for_update` is not decoration. This read is the count the capacity rule decides on, and a
+		plain read under `REPEATABLE-READ` answers with the view the transaction had when it first
+		looked, not with what the last writer committed. Measured in the lab, with the reading and
+		the writing deliberately separated: a request that read a row while it held two of its
+		three places, waited, and then wrote was **let through the cap** on that older count, and
+		was stopped only afterwards by an unrelated deadlock on the framework's own naming series.
+		A row that stays within its quantity because a deadlock happened to occur is not a rule.
+
+		A locking read returns the latest committed rows whatever the transaction's view was, so
+		the count is the count that exists when the decision is made. It is called from under the
+		invoice lock, and in the lock order the plan declares — the invoice, then the serials, then
+		the assignments — so it adds no cycle.
+		"""
+		if for_update:
+			rows = frappe.db.get_values(
+				ASSIGNMENT_DOCTYPE,
+				filters={"sales_invoice": invoice_name},
+				fieldname=["sales_invoice_item", "normalized_serial"],
+				as_dict=True,
+				for_update=True,
+			)
+		else:
+			rows = frappe.get_all(
+				ASSIGNMENT_DOCTYPE,
+				filters={"sales_invoice": invoice_name},
+				fields=["sales_invoice_item", "normalized_serial"],
+				limit_page_length=0,
+			)
 
 		return tuple(
 			ExistingAssignment(
-				row_key=row.sales_invoice_item,
-				normalized_serial=row.normalized_serial,
+				row_key=row.get("sales_invoice_item"),
+				normalized_serial=row.get("normalized_serial"),
 			)
 			for row in rows
 		)
@@ -159,15 +444,6 @@ class FrappeGateway:
 		`authz.require_company` decides on, so it must not be a value the caller supplied.
 		"""
 		return frappe.db.get_value(ASSIGNMENT_DOCTYPE, name, ["sales_invoice", "company"], as_dict=True)
-
-	def read_session_payload(self, name):
-		"""The stored payload text of one session, or `None`.
-
-		Read rather than re-encoded: the confirmation recomputes the payload's hash from exactly
-		the bytes that were stored, and a round trip through JSON would compare the session with
-		itself.
-		"""
-		return frappe.db.get_value(SESSION_DOCTYPE, name, "payload")
 
 	def list_assignments(self, invoice_name, limit, offset):
 		"""One page of the invoice's assignments, each with the text that was typed.
@@ -183,7 +459,9 @@ class FrappeGateway:
 				ASSIGNMENT_DOCTYPE,
 				filters={"sales_invoice": invoice_name},
 				fields=list(ASSIGNMENT_FIELDS),
-				order_by="sales_invoice_item asc, creation asc",
+				# `name` breaks a tie between two rows written in the same second: which serials are
+				# the excess ones depends on this order, and it has to be the same order every time.
+				order_by="sales_invoice_item asc, creation asc, name asc",
 				limit_start=offset,
 				limit_page_length=limit,
 			)
@@ -206,47 +484,7 @@ class FrappeGateway:
 
 		return rows
 
-	def read_session(self, token):
-		"""A session by its token, without locking it."""
-		stored = frappe.db.get_value(
-			SESSION_DOCTYPE,
-			{"token": token},
-			list(SESSION_FIELDS),
-			as_dict=True,
-		)
-
-		return _session_from(stored) if stored else None
-
 	# --- session lifecycle -------------------------------------------------------
-
-	def lock_session(self, token):
-		"""The session, locked for update, or `None`."""
-		stored = frappe.db.get_value(
-			SESSION_DOCTYPE,
-			{"token": token},
-			list(SESSION_FIELDS),
-			as_dict=True,
-			for_update=True,
-		)
-
-		return _session_from(stored) if stored else None
-
-	def create_session(self, values):
-		"""Insert a prepared session and return its **token**.
-
-		The token is what the client is given and what every later call finds the session by:
-		`read_session` and `lock_session` both look up `{"token": ...}`. Returning the document
-		name instead — a hash Frappe generates, which is a different value — handed the client an
-		identifier nothing else accepted, so a prepared preview could never be confirmed and the
-		only way to apply an import failed with "this preview was not found".
-
-		The DocType says the same thing: `token` is documented as the random unique preview
-		identifier that is the only thing returned to the browser.
-		"""
-		document = frappe.get_doc({"doctype": SESSION_DOCTYPE, **values})
-		document.insert()
-
-		return document.token
 
 	def mark_session_applied(self, name, applied_at, summary):
 		"""Record the applied state and the summary.
@@ -340,12 +578,15 @@ class FrappeGateway:
 		stored = frappe.db.get_value(
 			INVOICE_DOCTYPE,
 			name,
-			["name", "company"],
+			["name", "company", "docstatus"],
 			as_dict=True,
 			for_update=True,
 		)
 
-		return InvoiceRef(name=stored.name, company=stored.company) if stored else None
+		if not stored:
+			return None
+
+		return InvoiceRef(name=stored.name, company=stored.company, docstatus=int(stored.docstatus or 0))
 
 	def lock_serials(self, item_codes):
 		"""Lock the serial rows of the items involved, ordered by name.
@@ -469,41 +710,202 @@ class FrappeGateway:
 
 		return tuple(names)
 
+	def insert_transfer(self, record):
+		"""Write the audit record of a transfer, submitted, in this same transaction.
+
+		Inserted with `docstatus` already set rather than inserted and then submitted, and that is
+		not a shortcut: `Document.save` checks the **`write`** permission before it checks
+		anything else, and no role has `write` on this DocType — the record is not editable, which
+		is the whole point of it. Inserting at `docstatus = 1` asks for `create` and `submit` and
+		nothing else, and `set_docstatus` reads the transition as a submit, so `on_submit` still
+		runs if this app ever adds one.
+
+		One document, one call. The assignments it describes are written by the caller in the same
+		transaction, so a transfer that fails halfway leaves neither: a record of a move that did
+		not happen is worse than no record, and a move with no record is what this feature exists
+		to stop.
+
+		Afterwards the framework will not let go of it: a submitted document cannot be changed
+		(`_validate_update_after_submit` compares every field against the stored copy) and cannot
+		be deleted by anyone, the Administrator included
+		(`delete_doc.check_permission_and_not_submitted`). History that can be removed is not
+		history.
+		"""
+		document = frappe.get_doc({"doctype": TRANSFER_DOCTYPE, "docstatus": 1, **record})
+		document.insert()
+
+		return document.name
+
+	def insert_transfers(self, records, items):
+		"""Write restored audit records with their own rows, one document per record.
+
+		Not `insert_exported`, and the difference is what a child row is. Those rows are inserted
+		as documents of their own, which is right for a serial or an assignment and wrong for a row
+		of a table: a child needs `parenttype` and `parentfield`, which the format does not carry
+		and the framework sets from the parent when the parent is saved. Inserting them separately
+		would write orphans, or fail.
+
+		So each record is one document, with its rows in the child table, and the record's own
+		`docstatus` comes from the file — which is what makes a restored record submitted and
+		therefore as immutable as the one it came from (I24). The rows are stamped with the restore
+		by the caller's plan, and the provenance write-back is the same as everywhere else: when and
+		by whom the row was *originally* written, not when this site received it.
+		"""
+		by_parent = {}
+
+		for item in items:
+			by_parent.setdefault(item.get("parent"), []).append(item)
+
+		choices = _select_options(TRANSFER_DOCTYPE)
+		previous = flags.in_import
+		flags.in_import = True
+		names = []
+
+		try:
+			for record in records:
+				rows = by_parent.get(record.get("name"), [])
+				values = {field: record.get(field) for field in export.TRANSFER_FIELDS}
+				children = [
+					{
+						field: row.get(field)
+						for field in export.TRANSFER_ITEM_FIELDS
+						if field not in ("parent", "parenttype", "parentfield")
+					}
+					for row in rows
+				]
+				misplaced = export.misplaced_choices(choices, values)
+
+				if misplaced:
+					raise export.ExportError(
+						export.CODE_VALUE_NOT_ALLOWED,
+						f"مقدار «{misplaced[0][1]}» برای «{misplaced[0][0]}» در این سایت مجاز نیست.",
+					)
+
+				document = frappe.get_doc({"doctype": TRANSFER_DOCTYPE, **values, "items": children})
+				document.insert()
+
+				provenance = export.row_timestamps(record)
+
+				if provenance:
+					frappe.db.set_value(TRANSFER_DOCTYPE, document.name, provenance, update_modified=False)
+
+				names.append(document.name)
+		finally:
+			flags.in_import = previous
+
+		return tuple(names)
+
 	# --- exporting and importing this app's records -------------------------------
 
-	def export_rows(self):
-		"""Every serial and every assignment in the site, with each field the format defines.
+	def export_rows(self, principal):
+		"""The serials and assignments this caller may export, with every field the format defines.
 
-		Read with `frappe.get_all`, like every read in this file and for the same reason: what an
-		export contains must not depend on who clicked the button. The caller was authorized at
-		Manager level first — an export is a copy of the site's whole serial history.
+		Scoped to the caller's companies, in the reads themselves. An export is the one endpoint
+		whose entire answer is stored data, so a restriction applied to the finished document
+		would be a filter over rows that had already been read — and the rows it dropped would
+		still have been loaded, copied into a response and written to an operator's disk.
+
+		A principal with no company restriction — every `System Manager` on any site, and everyone
+		on a single-company site that has granted no `Company` user permissions — reads exactly
+		what this method read before the restriction existed: the whole site, in the same order,
+		row for row.
 
 		`limit_page_length=0` is Frappe's own "no limit", measured on this stack rather than
 		assumed: against a table of 78 rows it returned 78, where a page size would have returned
 		the page. An export that silently stopped at the first page would be the worst possible
 		bug in this file.
 		"""
-		return {
-			"serials": tuple(
+		companies = authz.visible_companies(principal)
+
+		assignments = tuple(
+			frappe.get_all(
+				ASSIGNMENT_DOCTYPE,
+				filters=self._company_filter(companies),
+				fields=list(export.ASSIGNMENT_FIELDS),
+				order_by="name asc",
+				limit_page_length=0,
+			)
+		)
+
+		if companies is None:
+			serials = tuple(
 				frappe.get_all(
 					SERIAL_DOCTYPE,
 					fields=list(export.SERIAL_FIELDS),
 					order_by="name asc",
 					limit_page_length=0,
 				)
-			),
-			"assignments": tuple(
-				frappe.get_all(
-					ASSIGNMENT_DOCTYPE,
-					fields=list(export.ASSIGNMENT_FIELDS),
-					order_by="name asc",
-					limit_page_length=0,
-				)
-			),
+			)
+		else:
+			serials = self._reachable_serials(assignments, export.SERIAL_FIELDS)
+
+		# The transfer records of the same companies, and their rows. Scoped the same way and for
+		# the same reason: a record names two invoices and a company, so a restricted caller must
+		# not be handed another company's. A transfer's own rows are read as one query filtered by
+		# the parents that survived, rather than read whole and filtered here — the second is a
+		# filter over rows that were already loaded.
+		transfers = tuple(
+			frappe.get_all(
+				TRANSFER_DOCTYPE,
+				filters=self._company_filter(companies),
+				fields=list(export.TRANSFER_FIELDS),
+				order_by="name asc",
+				limit_page_length=0,
+			)
+		)
+
+		return {
+			"serials": serials,
+			"assignments": assignments,
+			"transfers": transfers,
+			"transfer_items": self._transfer_items(tuple(row.get("name") for row in transfers)),
 		}
 
-	def transfer_world(self, principal, *, item_codes=(), company_names=(), invoice_names=()):
-		"""The site as `core.export.World` sees it, for planning an import.
+	def _transfer_item_names(self, transfers):
+		"""The names of the rows of these records, for the collision check."""
+		return [row.get("name") for row in self._transfer_items(tuple(row.get("name") for row in transfers))]
+
+	def _transfer_items(self, parents):
+		"""The rows of these transfers, in parent and then row-name order."""
+		rows = []
+
+		for chunk in _chunks(tuple(name for name in parents if name)):
+			rows.extend(
+				frappe.get_all(
+					TRANSFER_ITEM_DOCTYPE,
+					filters={"parent": ["in", chunk]},
+					fields=list(export.TRANSFER_ITEM_FIELDS),
+					order_by="parent asc, name asc",
+					limit_page_length=0,
+				)
+			)
+
+		return tuple(rows)
+
+	def _reachable_serials(self, assignment_rows, fields):
+		"""The serial rows those assignments point at, in name order.
+
+		`Logistics Serial` carries no company of its own; a serial belongs to a company only
+		through the assignments that name it. So this is the only way to ask which serials a
+		restricted caller may see — and it asks it by name, against the primary key, rather than
+		reading the whole serial table and dropping rows afterwards, which would have loaded the
+		other companies' rows first and is the very thing being avoided.
+		"""
+		referenced = tuple(
+			sorted({row.get("logistics_serial") for row in assignment_rows if row.get("logistics_serial")})
+		)
+
+		return tuple(
+			sorted(
+				self._by_names(SERIAL_DOCTYPE, referenced, fields),
+				key=lambda row: row.get("name") or "",
+			)
+		)
+
+	def transfer_world(
+		self, principal, *, item_codes=(), company_names=(), invoice_names=(), serial_names=()
+	):
+		"""The site as `core.export.World` sees it — as this caller is allowed to see it.
 
 		The names are the ones **the document mentions**, and they are given rather than derived:
 		the plan asks whether these items, companies and invoices exist here, so a world built
@@ -512,32 +914,34 @@ class FrappeGateway:
 		definition — reported every row as `ITEM_MISSING`, with the item sitting on the site the
 		whole time. `core.export.world_names` reads them off the document.
 
-		That leaves the permission question, which is answered where it belongs: existence is read
-		here without a company filter, and `core.authz.require_company` decides, per assignment and
-		against the **live invoice's** company, whether this caller may write it. A permission
-		filter applied to these reads would instead turn "you may not see it" into "somebody else
-		gets to decide", which is not the same answer.
+		That leaves the permission question, and this is where it is answered: every read below is
+		restricted to the caller's companies. The plan's three answers — create, skip, refuse — are
+		all derived from what the world holds, so a world that holds another company's rows
+		answers "this invoice already carries this serial" about an invoice the caller may not
+		see. That is both a disclosure and a decision made on data that is not theirs.
+
+		The write was never the hole. `apply_serial_restore` authorizes the live invoice's company
+		per row, from `world.invoices`, before it writes anything, and refuses the whole request
+		otherwise — but a preview that is only refused at the apply step is still a preview that
+		told the caller something.
+
+		`Item` and `Company` are asked for their existence only, and a restricted caller's world
+		holds only their own companies: a file naming somebody else's company reports
+		`COMPANY_MISSING` rather than confirming which companies this site has.
 		"""
-		serials = tuple(
-			frappe.get_all(
-				SERIAL_DOCTYPE,
-				fields=["name", "item_code", "normalized_serial"],
-				limit_page_length=0,
-			)
-		)
-		invoices = {
-			row.get("name"): row.get("company")
-			for row in self._by_names(INVOICE_DOCTYPE, tuple(invoice_names), ["name", "company"])
-		}
+		companies = authz.visible_companies(principal)
+		company_filter = self._company_filter(companies)
+
 		# The assignments already on the invoices this document names: that is the set the
 		# duplicate and link-conflict checks are about. With no invoice named, every stored
-		# assignment is read, because guessing that there are none would be guessing.
+		# assignment of the caller's companies is read, because guessing that there are none would
+		# be guessing.
 		assignment_filters = {"sales_invoice": ["in", tuple(invoice_names)]} if invoice_names else {}
 
 		assignments = tuple(
 			frappe.get_all(
 				ASSIGNMENT_DOCTYPE,
-				filters=assignment_filters,
+				filters={**assignment_filters, **company_filter},
 				fields=[
 					"name",
 					"sales_invoice",
@@ -551,17 +955,90 @@ class FrappeGateway:
 			)
 		)
 
+		if companies is None:
+			serials = tuple(
+				frappe.get_all(
+					SERIAL_DOCTYPE,
+					fields=["name", "item_code", "normalized_serial"],
+					limit_page_length=0,
+				)
+			)
+		else:
+			# Reachability is about the caller's companies, not about the invoices this document
+			# happens to name: a serial of theirs that sits on some other invoice is still a
+			# serial this site already has, and calling it new would make the import collide with
+			# its own history over a row it may not have been told about.
+			mine = tuple(
+				frappe.get_all(
+					ASSIGNMENT_DOCTYPE,
+					filters=company_filter,
+					fields=["logistics_serial"],
+					limit_page_length=0,
+				)
+			)
+			serials = self._reachable_serials(mine, ["name", "item_code", "normalized_serial"])
+
+		# One read, two answers. `docstatus` is read here and never taken from the file being
+		# restored: a cancelled invoice is refused by the planner the way every other write path
+		# refuses it, and only the stored document can say which invoices those are.
+		reachable = [
+			row
+			for row in self._by_names(INVOICE_DOCTYPE, tuple(invoice_names), ["name", "company", "docstatus"])
+			if companies is None or row.get("company") in companies
+		]
+
+		invoices = {row.get("name"): row.get("company") for row in reachable}
+		cancelled_invoices = frozenset(row.get("name") for row in reachable if row.get("docstatus") == 2)
+
+		item_rows = self._invoice_rows(tuple(invoices))
+
+		# The record names this site already uses, restricted to the caller's companies for the
+		# headers — a record of another company is not a name a caller may be told about. The child
+		# names are asked for by the parents that survived, so the same rule reaches them.
+		transfers = tuple(
+			frappe.get_all(
+				TRANSFER_DOCTYPE,
+				filters=company_filter,
+				fields=["name"],
+				limit_page_length=0,
+			)
+		)
+
+		# The serial masters the document names, looked up by name and nothing else. This read is
+		# deliberately *not* company-scoped, and it is the one exception to the paragraph above:
+		# `Logistics Serial` has no company column, so a name says nothing about which company
+		# holds it, and a name is unique over the site. Asked because the identity above cannot
+		# answer it — a serial reachable only through another company's invoice is invisible
+		# there, and a plan that called it new would insert a master whose name is taken and lose
+		# the whole file to a duplicate-key error.
+		named = frozenset(
+			row.get("name")
+			for row in self._by_names(SERIAL_DOCTYPE, tuple(serial_names), ["name"])
+			if row.get("name")
+		)
+
 		return export.World(
+			transfers=frozenset(row.get("name") for row in transfers),
+			transfer_items=frozenset(self._transfer_item_names(transfers)),
 			serial_identities=frozenset(export.serial_identity(row) for row in serials),
+			serial_names=named,
 			serials_by_identity={export.serial_identity(row): row.get("name") for row in serials},
 			items=frozenset(row.get("name") for row in self._by_names("Item", tuple(item_codes), ["name"])),
 			companies=frozenset(
-				row.get("name") for row in self._by_names("Company", tuple(company_names), ["name"])
+				row.get("name")
+				for row in self._by_names("Company", tuple(company_names), ["name"])
+				if companies is None or row.get("name") in companies
 			),
 			invoices=invoices,
-			invoice_rows=frozenset(
-				(row.get("parent"), row.get("name")) for row in self._invoice_rows(tuple(invoices))
-			),
+			cancelled_invoices=cancelled_invoices,
+			invoice_rows=frozenset((row.get("parent"), row.get("name")) for row in item_rows),
+			# The cap an operator meets while scanning, given to the planner as the row's own
+			# invoiced quantity. Counted from the assignments already read above, so an import
+			# measures a row against what it actually holds rather than against what a file says.
+			row_capacity={
+				(row.get("parent"), row.get("name")): required_units(row.get("qty")) for row in item_rows
+			},
+			row_registered=_count_by_row(assignments),
 			assignments_by_identity={
 				export.assignment_identity(row): row.get("logistics_serial") for row in assignments
 			},
@@ -590,7 +1067,14 @@ class FrappeGateway:
 		one of these fields simply does not carry it, and `values` leaves the insert's own value in
 		place rather than writing a blank over it.
 		"""
-		fields = export.SERIAL_FIELDS if doctype == SERIAL_DOCTYPE else export.ASSIGNMENT_FIELDS
+		fields = EXPORTED_FIELDS.get(doctype)
+
+		if fields is None:
+			raise export.ExportError(
+				export.CODE_BAD_SHAPE,
+				f"این برنامه نمی‌داند چگونه ردیف‌های «{doctype}» را بنویسد.",
+			)
+
 		choices = _select_options(doctype)
 		previous = flags.in_import
 		flags.in_import = True
@@ -656,7 +1140,13 @@ class FrappeGateway:
 		return tuple(rows)
 
 	def _invoice_rows(self, invoice_names):
-		"""Every item row of these invoices, as `(invoice, row name)` pairs."""
+		"""Every item row of these invoices, with the quantity it is allowed to carry.
+
+		`qty` is read here rather than in a second query because the capacity of a row *is* its
+		invoiced quantity, and the two are asked for together or not at all: a caller that had the
+		rows without their quantities would have to guess, and guessing is how a cap becomes a
+		number nobody enforces.
+		"""
 		rows = []
 
 		for chunk in _chunks(tuple(invoice_names)):
@@ -667,7 +1157,7 @@ class FrappeGateway:
 				frappe.get_all(
 					"Sales Invoice Item",
 					filters={"parent": ["in", chunk]},
-					fields=["parent", "name"],
+					fields=["parent", "name", "qty", "idx"],
 					limit_page_length=0,
 				)
 			)
@@ -703,7 +1193,6 @@ class FrappeGateway:
 			"existing": existing,
 			"delimiters": stored_delimiters,
 			"patterns": patterns,
-			"allow_over_quantity": bool(settings.allow_over_quantity),
 		}
 		values.update(overrides)
 
@@ -720,6 +1209,22 @@ def _chunks(values, size=IN_CHUNK):
 
 	for start in range(0, len(values), size):
 		yield values[start : start + size]
+
+
+def _count_by_row(assignments):
+	"""How many assignments each invoice row holds, from a read that has already happened.
+
+	Counted here rather than asked of the database, because the import already reads exactly these
+	rows to answer "is this serial already on this invoice" — and a second query could answer
+	about a different moment than the first.
+	"""
+	counts = {}
+
+	for row in assignments:
+		key = (row.get("sales_invoice"), row.get("sales_invoice_item"))
+		counts[key] = counts.get(key, 0) + 1
+
+	return counts
 
 
 def _select_options(doctype):

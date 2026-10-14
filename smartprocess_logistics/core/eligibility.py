@@ -1,109 +1,139 @@
-"""Which invoices the missing-serial report may cover.
+"""Whether a serial is required for an invoice row, how many, and what state that row is in.
 
-The rule is deliberately narrow, because the app cannot know whether an item required a
-serial before it was installed. An invoice is eligible only when the site recorded an
-installation timestamp and the invoice was created at or after it:
+One rule, stated once, applied where it is decided.
 
-- `Sales Invoice.creation` is the reference, not the posting date and not the submission
-  date. A posting date is typed by a person and can be backdated, so it cannot decide
-  eligibility, and the submission date is not stored on the invoice at all.
-- An invoice created before the installation stays out even when it is submitted afterwards.
-  Nothing distinguishes it from an invoice that predates the app.
-- A cancelled invoice is out unless the caller asks for cancelled invoices explicitly.
-- Before the first install there is no timestamp, and nothing is eligible. The report is
-  empty rather than guessing.
+**Mandatory is a property of the item, not of the invoice's age.** An item marked
+`sp_serial_required` needs one label per unit sold, and a row short of them is a shortage. An item
+that is *not* marked is **not a serial row at all**: it is not required — so it can never be short
+— and it is not offered either, because the station shows the rows that can be worked on and a row
+with no requirement is a row the report will never ask about.
 
-Registration itself is not limited by any of this. An operator may register serial numbers on
-an older invoice by hand; only the report stays out of the period it cannot vouch for.
+That is the whole policy:
+
+| item | labels | a shortage | in the report | in the scan station |
+| ---- | ------ | ---------- | ------------- | ------------------- |
+| `sp_serial_required = 1` | required, one per unit | possible | yes, when short | a row, and the rows a registration is refused on |
+| `sp_serial_required = 0` | neither offered nor refused | never | never | no row: it is not in the dialog, and `*N` naming it is answered rather than obeyed |
+
+`core.reports` applies it as `i.sp_serial_required = 1` in the statement, the station applies it by
+serving only those rows, `core.validation` applies it by refusing a registration on any other, and
+`is_eligible` below is the one predicate all three read. The three must agree: a row the report
+calls short and a row the station does not offer would be the app contradicting itself, and a row
+the station hides but the endpoints still write to would be a rule enforced in a window and
+nowhere else.
+
+What an unmarked row keeps
+--------------------------
+Registrations an unmarked row already carries are **not deleted, not hidden from the database and
+not rewritten**: this module decides what is offered and what may be added, and nothing else. They
+stay in `Logistics Serial Assignment` where the Desk list, the API and the export can read them,
+and they can still be removed — a removal is not a registration, which is why the rule below is
+about what may be *added*. Hiding a row is not a way of losing what is on it.
+
+What this module used to be
+---------------------------
+It decided which invoices the report *might* cover by comparing `Sales Invoice.creation` with
+`Logistics Settings.installed_on`, and left out every invoice older than the app. The reasoning
+was that an invoice predating the install cannot be judged — but that is the wrong input. What
+decides a shortage is the item's **current** flag, read when the report runs, which says nothing
+about when the invoice was written. The date rule therefore excluded real shortages for no reason
+and for as long as the site kept its invoices.
+
+So the install timestamp no longer reaches this module, or the report, at all. It keeps the one
+job it always had and that this module never had anything to do with: `setup/seeds.py` writes it
+and reads it back to know whether the app's own seeding finished, so a half-finished install is
+completed on the next run and a finished one is left alone. An upgrade, a reinstall, a restore, a
+move to another server or a change to that timestamp cannot change which rows are audited,
+because none of them is an input to the rule below.
 """
 
-from datetime import datetime
+from smartprocess_logistics.core.quantities import required_units
 
-DOCSTATUS_DRAFT = 0
-DOCSTATUS_SUBMITTED = 1
-DOCSTATUS_CANCELLED = 2
+MANDATORY = "MANDATORY"
+OPTIONAL = "OPTIONAL"
 
-UNKNOWN_DOCSTATUS = "DOCSTATUS_UNKNOWN"
-
-REASON_NOT_INSTALLED = "NOT_INSTALLED"
-REASON_CREATED_BEFORE_INSTALL = "CREATED_BEFORE_INSTALL"
-REASON_CANCELLED = "CANCELLED"
-
-CODE_NOT_A_TIMESTAMP = "TIMESTAMP_NOT_A_TIMESTAMP"
-CODE_TIMESTAMP_MISMATCH = "TIMESTAMP_AWARENESS_MISMATCH"
-CODE_NOT_A_DOCSTATUS = "DOCSTATUS_NOT_AN_INTEGER"
+# The four states one serial row can be in, as names rather than as colours: the window paints them
+# and the server decides them, and neither has to guess what the other means by a number.
+INCOMPLETE = "INCOMPLETE"  # fewer labels than the row requires
+STAGED = "STAGED"  # exactly its quantity, with labels not yet written
+SAVED = "SAVED"  # exactly its quantity, every label in the database
+CONFLICT = "CONFLICT"  # more labels than the invoice allows
 
 
-class EligibilityError(ValueError):
-	"""An input that cannot decide eligibility. `code` is stable."""
-
-	def __init__(self, code, message):
-		super().__init__(message)
-		self.code = code
-		self.message = message
+def kind(serial_required):
+	"""Whether a row is a required one or merely permitted one."""
+	return MANDATORY if serial_required else OPTIONAL
 
 
-def parse_timestamp(value):
-	"""Accept a `datetime` or an ISO-8601 string and return a `datetime`.
+def requirement(serial_required, invoiced_qty):
+	"""How many labels this row *must* carry.
 
-	Only `datetime.fromisoformat` is used. No dynamic evaluation of any kind happens here.
+	Zero for an optional item, whatever its quantity: an item nobody marked as needing a serial
+	cannot be short of one, and a number here would turn every optional registration into a
+	shortage. For a required item it is the invoiced quantity, through the same function the rest
+	of the app counts with — magnitude, so a credit note still needs a label per unit returned,
+	and fractions round up.
 	"""
-	if isinstance(value, datetime):
-		return value
+	if not serial_required:
+		return 0
 
-	if isinstance(value, str):
-		try:
-			return datetime.fromisoformat(value.strip())
-		except ValueError as error:
-			raise EligibilityError(CODE_NOT_A_TIMESTAMP, f"زمان نامعتبر: {value!r}") from error
-
-	raise EligibilityError(CODE_NOT_A_TIMESTAMP, "زمان باید datetime یا رشتهٔ ISO-8601 باشد.")
+	return required_units(invoiced_qty)
 
 
-def check_comparable(created, installed):
-	"""Refuse to compare a naive timestamp with an aware one."""
-	if (created.tzinfo is None) != (installed.tzinfo is None):
-		raise EligibilityError(
-			CODE_TIMESTAMP_MISMATCH,
-			"یکی از زمان‌ها منطقهٔ زمانی دارد و دیگری ندارد و قابل مقایسه نیستند.",
-		)
+def is_reported(serial_required):
+	"""Whether a row may appear in the shortage report at all.
 
-
-def check_docstatus(docstatus):
-	"""Refuse anything that is not Frappe's 0, 1 or 2."""
-	if isinstance(docstatus, bool) or not isinstance(docstatus, int):
-		raise EligibilityError(CODE_NOT_A_DOCSTATUS, "وضعیت سند باید عدد صحیح باشد.")
-
-	if docstatus not in (DOCSTATUS_DRAFT, DOCSTATUS_SUBMITTED, DOCSTATUS_CANCELLED):
-		raise EligibilityError(CODE_NOT_A_DOCSTATUS, f"وضعیت سند ناشناخته است: {docstatus}")
-
-	return docstatus
-
-
-def ineligibility_reason(*, invoice_creation, installed_on, docstatus, include_cancelled=False):
-	"""Why an invoice is not eligible, or `None` when it is.
-
-	Returning the reason rather than only a boolean keeps a report able to explain itself
-	instead of silently dropping rows.
+	Only a required item can be short, which is why the report's own statement carries
+	`i.sp_serial_required = 1` rather than comparing a requirement of zero with a count.
 	"""
-	if not installed_on:
-		return REASON_NOT_INSTALLED
-
-	check_docstatus(docstatus)
-
-	if docstatus == DOCSTATUS_CANCELLED and not include_cancelled:
-		return REASON_CANCELLED
-
-	created = parse_timestamp(invoice_creation)
-	installed = parse_timestamp(installed_on)
-	check_comparable(created, installed)
-
-	if created < installed:
-		return REASON_CREATED_BEFORE_INSTALL
-
-	return None
+	return bool(serial_required)
 
 
-def is_report_eligible(**kwargs):
-	"""Whether an invoice may appear in the missing-serial report."""
-	return ineligibility_reason(**kwargs) is None
+def is_eligible(serial_required):
+	"""Whether a row may be offered for serials, and may be given one.
+
+	The one predicate the three surfaces read: the station serves only these rows, `core.validation`
+	refuses a registration anywhere else, and the report audits the same set. An unmarked row is not
+	a serial row — which is a decision about *adding* a label, not about the ones already there. The
+	registrations an unmarked row holds are neither removed nor rewritten by this rule.
+	"""
+	return bool(serial_required)
+
+
+def row_state(required, capacity, persisted, staged=0):
+	"""The one state a serial row is in: `INCOMPLETE`, `STAGED`, `SAVED` or `CONFLICT`.
+
+	Four inputs and one answer, and every surface that draws or reports a row reads it from here —
+	the window's card, the endpoint beside it, and the tests — so there is no second opinion about
+	what "done" means.
+
+	- `required` is how many labels the row must carry, `capacity` the most the invoice allows
+	  (the same number for every row this app offers, and two parameters rather than one because
+	  they are two different questions: a shortage and an excess).
+	- `persisted` is what the **database** holds on the row, `staged` what an operator has in hand
+	  and unsaved. The window passes both; the server passes `staged=0`, because it cannot know
+	  about a label that has not been sent to it yet — which is exactly why the state is computed
+	  where the numbers are, and not inferred from one side by the other.
+
+	The order of the answers is part of the rule. **More than the invoice allows is a conflict
+	first**: a row that has to be fixed is not also "nearly done". Then a shortage, then — with
+	exactly the required count — whether everything is written (`SAVED`) or something is still in
+	hand (`STAGED`). The last distinction is the one an operator acts on, and it is the reason
+	`STAGED` is a state of its own rather than a shade of done: a green row is finished work that
+	has not been sent, and the blue one is the answer the server gave back.
+
+	`core.quantities.RowCoverage.is_complete` answers a different question and keeps its meaning:
+	it is "nothing is missing", which a row over its quantity also satisfies, and the report's
+	totals are built on it. This function answers "what is this row", which an over-filled row
+	does not satisfy — so an over-filled row is `RowCoverage.is_complete` **and** `CONFLICT`, and
+	that is not a contradiction but the two questions being asked.
+	"""
+	held = persisted + staged
+
+	if held > capacity:
+		return CONFLICT
+
+	if held < required:
+		return INCOMPLETE
+
+	return STAGED if staged else SAVED

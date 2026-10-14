@@ -8,9 +8,11 @@ unit sold. Three decisions are worth stating plainly, because each one is observ
 - **Fractions round up.** A row of 2.5 units needs three labels, never two. Rounding down
   would silently leave a sold unit unlabelled. The rounding uses a small tolerance so that a
   quantity stored as 2.0000000001 is read as 2 rather than as 3.
-- **A row may be over its requirement.** Registering more labels than the row's quantity is a
-  business decision the site makes through `allow_over_quantity`; this module only reports the
-  number.
+- **A row may still be over its requirement in stored data.** Registration refuses it — the cap
+  is the row's invoiced quantity, and it is not a site preference — but a row written before
+  that rule, or by something outside the app, can hold more. This module reports the number
+  rather than hiding it, because a count that is too high is what tells an operator where to
+  look.
 """
 
 import math

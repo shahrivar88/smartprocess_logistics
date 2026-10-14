@@ -81,7 +81,7 @@ class TestDocTypeControllers(UnitTestCase):
 
 		return name, module
 
-	# --- the six files ------------------------------------------------------------------
+	# --- every file the app ships -------------------------------------------------------
 
 	def test_every_doctype_json_has_a_controller_module_beside_it(self):
 		for path, _ in self.definitions():
@@ -155,7 +155,11 @@ class TestDocTypeControllers(UnitTestCase):
 	# --- coverage -----------------------------------------------------------------------
 
 	def test_the_app_has_a_standard_a_single_and_a_child_doctype_to_check(self):
-		"""Without this, the loops above would pass over an empty or partial set."""
+		"""Without this, the loops above would pass over an empty or partial set.
+
+		The names are listed rather than counted: a count says only that something changed, and
+		the question a reader has when this fails is *which* DocType appeared or disappeared.
+		"""
 		parsed = [doc for _, doc in self.definitions()]
 		kinds = {
 			"child": [doc for doc in parsed if doc.get("istable")],
@@ -163,7 +167,20 @@ class TestDocTypeControllers(UnitTestCase):
 			"standard": [doc for doc in parsed if not doc.get("istable") and not doc.get("issingle")],
 		}
 
-		self.assertEqual(len(parsed), 6)
+		self.assertEqual(
+			sorted(doc["name"] for doc in parsed),
+			[
+				"Logistics Import Delimiter",
+				"Logistics Import Session",
+				"Logistics Item Marker",
+				"Logistics Serial",
+				"Logistics Serial Assignment",
+				"Logistics Serial Transfer",
+				"Logistics Serial Transfer Item",
+				"Logistics Settings",
+			],
+		)
+
 		for kind, docs in kinds.items():
 			with self.subTest(kind=kind):
 				self.assertTrue(docs, f"no {kind} DocType is covered")

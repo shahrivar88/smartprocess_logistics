@@ -17,6 +17,7 @@ from smartprocess_logistics.core.session import (
 	EXPIRED,
 	FAILED,
 	PREPARED,
+	RETENTION_DAYS,
 	STATES,
 	TERMINAL_STATES,
 	TRANSITIONS,
@@ -32,7 +33,6 @@ from smartprocess_logistics.core.session import (
 	finished_at,
 	is_expirable,
 	is_purgeable,
-	RETENTION_DAYS,
 	select_expirable,
 	select_purgeable,
 )

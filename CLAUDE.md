@@ -44,7 +44,7 @@ rather than assuming it.
 
 - `smartprocess_logistics/core/` — every rule, with **no Frappe import**. Pure, deterministic,
   testable without a bench.
-- `smartprocess_logistics/api/` — the six whitelisted endpoints and the one gateway that
+- `smartprocess_logistics/api/` — the sixteen whitelisted endpoints and the one gateway that
   touches the ORM. An endpoint parses arguments and wires; it never decides.
 - `smartprocess_logistics/setup/`, `install.py` — idempotent install, migrate and uninstall.
   Not registered in `hooks.py` yet.

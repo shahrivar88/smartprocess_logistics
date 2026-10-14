@@ -31,7 +31,12 @@ import importlib
 import pathlib
 from datetime import datetime, timedelta
 
-from smartprocess_logistics.core.defaults import DEFAULT_DELIMITERS, DEFAULT_ITEM_MARKERS
+from smartprocess_logistics.core import authz
+from smartprocess_logistics.core.defaults import (
+	DEFAULT_DELIMITERS,
+	DEFAULT_ITEM_MARKERS,
+	DEFAULT_NEXT_ROW_COMMAND,
+)
 from smartprocess_logistics.core.normalization import NORMALIZATION_VERSION
 from smartprocess_logistics.core.session import APPLIED, PREPARED, PURGE_BATCH, RETENTION_DAYS
 from smartprocess_logistics.tests.base import UnitTestCase
@@ -50,6 +55,9 @@ SESSION_TOKEN = "token-that-must-not-be-copied"
 VIEWER = "Logistics Serial Viewer"
 EDITOR = "Logistics Serial Editor"
 MANAGER = "Logistics Serial Manager"
+# The fourth role, and the only one that grants nothing on a DocType: it exists so that one
+# endpoint can require it in addition to a Manager level. `core.authz.ENDPOINT_ROLES`.
+ARCHIVIST = "Logistics Serial Archivist"
 
 RECORDED_AT = "2026-01-01 00:00:00.000000"
 
@@ -181,13 +189,25 @@ class LifecycleTestCase(UnitTestCase):
 
 
 class AfterInstallTest(LifecycleTestCase):
-	def test_creates_the_three_roles(self):
+	def test_creates_the_four_roles(self):
 		self.given(bare_bench())
 		install = self.load_install()
 
 		install.after_install()
 
-		self.assertEqual(self.inserted_roles(), [VIEWER, EDITOR, MANAGER])
+		self.assertEqual(self.inserted_roles(), [VIEWER, EDITOR, MANAGER, ARCHIVIST])
+
+	def test_the_roles_it_creates_are_the_roles_the_app_checks_for(self):
+		"""`setup.roles` reads the names from `core.authz` rather than spelling them again, because
+		that module is what decides with them: a second spelling is a role the app requires and
+		never creates, and the site would be told to grant a role that does not exist."""
+		self.given(bare_bench())
+		roles, _constraints, _seeds = self.load_setup()
+
+		self.assertEqual(
+			tuple(roles.ROLES),
+			(authz.ROLE_VIEWER, authz.ROLE_EDITOR, authz.ROLE_MANAGER, authz.ROLE_ARCHIVIST),
+		)
 
 	def test_creates_the_unique_constraints(self):
 		"""A fresh install never runs `after_migrate`, so the constraints must be created here."""
@@ -223,7 +243,7 @@ class AfterInstallTest(LifecycleTestCase):
 
 		install.after_install()
 
-		self.assertEqual(self.inserted_roles(), [EDITOR, MANAGER])
+		self.assertEqual(self.inserted_roles(), [EDITOR, MANAGER, ARCHIVIST])
 
 	def test_settings_a_failed_install_already_wrote_are_not_seeded_twice(self):
 		"""The half-installed case: the tables are filled but the timestamp was never written."""
@@ -260,6 +280,33 @@ class AfterInstallTest(LifecycleTestCase):
 
 
 class AfterMigrateTest(LifecycleTestCase):
+	def test_the_migrate_that_adds_the_command_column_gives_the_site_the_default(self):
+		"""The one moment the seed exists for: a settings row that predates the field.
+
+		The column arrives empty on a site that already has a settings row — Frappe does not write
+		a field's default into rows that already exist — and the command is required, with a rule
+		that refuses an empty one. So without this step the migrate would leave a row its own
+		validation refuses to save, on the very next change an administrator makes.
+		"""
+		bench = bare_bench(installed_on=RECORDED_AT, next_row_command=None)
+		self.given(bench)
+		install = self.load_install()
+
+		install.after_migrate()
+
+		self.assertEqual(bench.settings.next_row_command, DEFAULT_NEXT_ROW_COMMAND)
+
+	def test_a_site_that_chose_its_own_command_keeps_it(self):
+		"""A migrate is not a way to put the default back over a decision somebody made."""
+		bench = bare_bench(installed_on=RECORDED_AT, next_row_command="§§")
+		self.given(bench)
+		install = self.load_install()
+
+		install.after_migrate()
+
+		self.assertEqual(bench.settings.next_row_command, "§§")
+		self.assertEqual(bench.settings.saves, 0, "nothing needed writing")
+
 	def test_repairs_a_site_whose_install_stopped_halfway(self):
 		"""The state `install_app` can leave behind: the app is installed, the work is not done."""
 		bench = bare_bench()
@@ -270,7 +317,7 @@ class AfterMigrateTest(LifecycleTestCase):
 
 		install.after_migrate()
 
-		self.assertEqual(sorted(bench.roles), sorted([VIEWER, EDITOR, MANAGER]))
+		self.assertEqual(sorted(bench.roles), sorted([VIEWER, EDITOR, MANAGER, ARCHIVIST]))
 		self.assertEqual(self.added_constraint_names(), ["unique_item_serial", "unique_invoice_serial"])
 		self.assertEqual(len(bench.settings.item_markers), len(DEFAULT_ITEM_MARKERS))
 		self.assertEqual(bench.settings.installed_on, bench.now)
@@ -577,7 +624,7 @@ class BlastRadiusTest(LifecycleTestCase):
 
 		for doc in self.bench.inserted:
 			self.assertEqual(doc["doctype"], "Role")
-			self.assertIn(doc["role_name"], (VIEWER, EDITOR, MANAGER))
+			self.assertIn(doc["role_name"], (VIEWER, EDITOR, MANAGER, ARCHIVIST))
 
 	def test_the_lifecycle_reads_nothing_during_install_or_migrate(self):
 		self.given(populated_bench())

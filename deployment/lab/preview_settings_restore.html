@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+	<head>
+		<meta charset="utf-8" />
+		<title>بازیابی سریال‌ها — اجرا و بررسی</title>
+		<script>
+			// The real CSS from the app's own mount, with a marker that changes on every load so a
+			// reload cannot be served a cached copy. `?base=` points at another origin serving the
+			// same files; the lab by default.
+			const BUST = "?harness=" + Date.now();
+			const QUERY = new URLSearchParams(window.location.search);
+			const LAB = QUERY.get("lab") || "http://localhost:8095";
+			const STATION_BASE = QUERY.get("base") || `${LAB}/assets/smartprocess_logistics`;
+
+			document.write(`<link rel="stylesheet" href="${STATION_BASE}/css/logistics.css${BUST}">`);
+		</script>
+		<style>
+			body {
+				background: var(--bg-color, #f5f5f5);
+				color: var(--text-color, #1f272e);
+				font-family: var(--font-stack, system-ui, sans-serif);
+				margin: 0;
+				padding: 16px;
+			}
+
+			#pane {
+				background: #fff;
+				border-radius: 8px;
+				box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+				margin: 16px 0;
+				padding: 16px;
+			}
+
+			#results {
+				background: #1f272e;
+				border: 2px solid #29cd42;
+				border-radius: 8px;
+				color: #e6f0e8;
+				direction: ltr;
+				font-family: ui-monospace, monospace;
+				font-size: 12px;
+				line-height: 1.6;
+				margin-top: 16px;
+				max-height: 46vh;
+				overflow: auto;
+				padding: 12px;
+				text-align: left;
+				white-space: pre-wrap;
+			}
+
+			.note {
+				background: #fff8e1;
+				border: 1px solid #ffe082;
+				border-radius: 8px;
+				line-height: 1.8;
+				padding: 12px 16px;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="note">
+			پنجرهٔ واقعی «بازیابی سریال‌ها» روی یک Desk بدلی و یک سرور درون‌حافظه‌ای که همان قواعد
+			نقاط پایانی را اجرا می‌کند. بررسی‌های زیر از درون DOM خودِ پنجره رانده می‌شوند.
+		</div>
+
+		<div id="pane"></div>
+		<div id="results">running…</div>
+
+		<script>
+			// A minimal jQuery, because the settings script and the dialogs it opens are written
+			// against one and this page has no site to fetch the real thing from. Only what the
+			// script touches at load and at run: `$`, `append`, `appendTo`, `html`, `hide`, `show`,
+			// `on`, `trigger`, `attr`, `val`, `text`, `find`, `remove`, `first`.
+			function make_node(tag) {
+				const node = document.createElement(tag || "div");
+				Object.assign(node, {
+					html(value) {
+						if (value === undefined) {
+							return node.innerHTML;
+						}
+
+						node.innerHTML = value;
+
+						return node;
+					},
+					append(child) {
+						node.appendChild(child.nodeType ? child : child[0]);
+
+						return node;
+					},
+					appendTo(parent) {
+						(document.querySelector(parent) || document.body).appendChild(node);
+
+						return node;
+					},
+					hide() {
+						node.style.display = "none";
+
+						return node;
+					},
+					show() {
+						node.style.display = "";
+
+						return node;
+					},
+					find(selector) {
+						return wrap(Array.from(node.querySelectorAll(selector)));
+					},
+					first() {
+						return wrap(node.querySelectorAll("*").length ? [node] : []);
+					},
+					remove() {
+						node.remove();
+
+						return node;
+					},
+					on() {
+						return node;
+					},
+					trigger() {
+						return node;
+					},
+					attr() {
+						return node;
+					},
+					prop() {
+						return node;
+					},
+					text(value) {
+						if (value === undefined) {
+							return node.textContent;
+						}
+
+						node.textContent = value;
+
+						return node;
+					},
+					val(value) {
+						if (value === undefined) {
+							return node.value;
+						}
+
+						node.value = value;
+
+						return node;
+					},
+					addClass(name) {
+						node.classList.add(name);
+
+						return node;
+					},
+					is() {
+						return true;
+					},
+				});
+
+				return node;
+			}
+
+			function wrap(nodes) {
+				const list = Array.isArray(nodes) ? nodes : [nodes];
+				const api = make_node("span");
+
+				api.__nodes = list;
+				api.html = (value) => {
+					if (value === undefined) {
+						return list.map((node) => node.innerHTML).join("");
+					}
+
+					list.forEach((node) => {
+						node.innerHTML = value;
+					});
+
+					return api;
+				};
+				api.text = (value) => {
+					if (value === undefined) {
+						return list.map((node) => node.textContent).join("");
+					}
+
+					list.forEach((node) => {
+						node.textContent = value;
+					});
+
+					return api;
+				};
+				api.find = (selector) => wrap(list.flatMap((node) => Array.from(node.querySelectorAll(selector))));
+				api.length = list.length;
+
+				return api;
+			}
+
+			const $ = (value) => wrap(typeof value === "string" ? Array.from(document.querySelectorAll(value)) : value);
+
+			// --- the stand-in -------------------------------------------------------------------
+
+			const FORM_HANDLERS = {};
+			const DIALOGS = [];
+			const shown = [];
+			// Desk's freeze is a counter, and an unpaired one leaves the page grey for good. The
+			// settings script uses it directly, so this page counts exactly as Desk does and
+			// asserts the count comes back to zero after every path.
+			const frozen = { count: 0 };
+
+			// `frappe.call` answers with a jQuery Deferred, not a native promise, and the settings
+			// script's apply chain ends in `.always(...)` — jQuery's "on settle either way". A
+			// native promise has no such method, so the double has one and, being a `Promise`
+			// subclass, keeps it through `then` and `catch` exactly as jQuery does.
+			class DeskPromise extends Promise {
+				always(handler) {
+					return this.then(
+						(value) => {
+							handler();
+
+							return value;
+						},
+						(error) => {
+							handler();
+
+							throw error;
+						}
+					);
+				}
+			}
+
+			const frappe = {
+				provide(namespace) {
+					let node = globalThis;
+
+					for (const part of namespace.split(".")) {
+						node[part] = node[part] || {};
+						node = node[part];
+					}
+				},
+				ui: {
+					form: {
+						on: (doctype, table) => {
+							FORM_HANDLERS[doctype] = FORM_HANDLERS[doctype] || [];
+							FORM_HANDLERS[doctype].push(table);
+						},
+					},
+					Dialog: class {
+						constructor(options) {
+							this.options = options;
+							this.$wrapper = wrap(make_node("div"));
+							this.fields_dict = {};
+
+							(options.fields || []).forEach((field) => {
+								const wrapper = make_node("div");
+
+								this.fields_dict[field.fieldname] = { $wrapper: wrap(wrapper), df: field };
+							});
+
+							node_of(".modal", this.fields_dict);
+							DIALOGS.push(this);
+						}
+
+						show() {
+							this.visible = true;
+
+							return this;
+						}
+
+						hide() {
+							this.visible = false;
+
+							return this;
+						}
+					},
+				},
+				user: { has_role: () => true },
+				session: { user: "archivist@example.test" },
+				utils: {
+					escape_html: (value) =>
+						String(value).replace(
+							/[&<>"']/g,
+							(character) =>
+								({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[
+									character
+								])
+						),
+					icon: () => "",
+				},
+				dom: {
+					freeze: () => {
+						frozen.count += 1;
+					},
+					unfreeze: () => {
+						frozen.count = Math.max(0, frozen.count - 1);
+					},
+				},
+				db: { get_single_value: () => Promise.resolve(1) },
+				defaults: { get_user_permissions: () => ({}) },
+				msgprint: (payload) => shown.push(payload),
+				call: (request) => DeskPromise.resolve(server.answer(request)),
+			};
+
+			function node_of(selector, fields) {
+				const node = document.getElementById("pane");
+				const modal = document.createElement("div");
+
+				modal.className = "modal";
+				node.appendChild(modal);
+
+				Object.values(fields).forEach((field) => modal.appendChild(field.$wrapper.__nodes[0]));
+
+				return modal;
+			}
+
+			globalThis.frappe = frappe;
+			globalThis.window = globalThis;
+			globalThis.$ = $;
+			globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+			globalThis.__ = (text, args) => {
+				if (args === undefined) {
+					return text;
+				}
+
+				const list = Array.isArray(args) ? args : [args];
+
+				return text.replace(/\{(\d+)\}/g, (whole, index) =>
+					Object.prototype.hasOwnProperty.call(list, Number(index))
+						? String(list[Number(index)])
+						: whole
+				);
+			};
+
+			// --- the in-memory server ------------------------------------------------------------
+
+			const HISTORY_PREVIEW = {
+				token: "digest-of-the-file",
+				source_site: "the-old-site",
+				exported_on: "2026-10-10 09:00:00",
+				exported_by: "Administrator",
+				format_version: 2,
+				file_counts: { serials: 1, assignments: 1, transfers: 2, transfer_items: 3 },
+				to_create: { serials: 1, assignments: 1 },
+				to_skip: { serials: 0, assignments: 0 },
+				conflicts: 1,
+				by_reason: { NOT_HISTORY: 1 },
+				records_in_file: 2,
+				sample: [{ row: "LSA-2026-00009", message: "این ردیف روی فاکتور لغو‌شده نیست", detail: "SINV-2" }],
+			};
+
+			const LIVE_PREVIEW = {
+				token: "digest-of-the-file",
+				source_site: "the-old-site",
+				exported_on: "2026-10-10 09:00:00",
+				exported_by: "Administrator",
+				format_version: 2,
+				file_counts: { serials: 1, assignments: 1, transfers: 2, transfer_items: 3 },
+				to_create: { serials: 1, assignments: 1 },
+				to_skip: { serials: 0, assignments: 0 },
+				conflicts: 1,
+				by_reason: { INVOICE_CANCELLED: 1 },
+				records_in_file: 2,
+				sample: [
+					{
+						row: "LSA-2026-00001",
+						message: "فاکتور فروش لغو شده است و سریال جدید نمی‌پذیرد",
+						detail: "SINV-1",
+					},
+				],
+			};
+
+			const RECORDS_PREVIEW = {
+				token: "digest-of-the-file",
+				source_site: "the-old-site",
+				exported_on: "2026-10-10 09:00:00",
+				exported_by: "Administrator",
+				format_version: 2,
+				file_counts: { serials: 1, assignments: 1, transfers: 2, transfer_items: 3 },
+				to_create: { serials: 0, assignments: 0 },
+				to_skip: { serials: 0, assignments: 0 },
+				to_create_records: { transfers: 1, items: 2 },
+				conflicts: 1,
+				by_reason: { RECORD_EXISTS: 1 },
+				records_in_file: 2,
+				sample: [
+					{
+						row: "LST-2026-00002",
+						message: "سابقه‌ای با همین نام از قبل روی این سایت هست",
+						detail: "LST-2026-00002",
+					},
+				],
+			};
+
+			const server = {
+				calls: [],
+				applies: [],
+				preview: null,
+				records: null,
+
+				reset() {
+					this.calls = [];
+					this.applies = [];
+					this.preview = HISTORY_PREVIEW;
+					this.records = RECORDS_PREVIEW;
+				},
+
+				answer(request) {
+					const method = request.method.split(".").pop();
+
+					this.calls.push({ method: method, args: request.args });
+
+					if (method === "preview_serial_restore") {
+						return Promise.resolve({ message: LIVE_PREVIEW });
+					}
+
+					if (method === "preview_cancelled_serial_history") {
+						return Promise.resolve({ message: this.preview });
+					}
+
+					if (method === "preview_restore_audit_records") {
+						return Promise.resolve({ message: this.records });
+					}
+
+					if (
+						method === "apply_serial_restore" ||
+						method === "restore_cancelled_serial_history" ||
+						method === "restore_audit_records"
+					) {
+						this.applies.push({ method: method, args: request.args });
+
+						return Promise.resolve({
+							message: {
+								counts: {
+									created: { serials: 1, assignments: 1 },
+									skipped: { serials: 0, assignments: 0 },
+									conflicts: 1,
+								},
+							},
+						});
+					}
+
+					return Promise.resolve({ message: {} });
+				},
+			};
+
+			server.reset();
+
+			// The real file, from the app's own mount.
+			(function load_settings_script() {
+				const script = document.createElement("script");
+
+				script.src = `${STATION_BASE}/js/logistics_settings_transfer.js${BUST}`;
+				script.async = false;
+				document.head.appendChild(script);
+			})();
+		</script>
+
+		<script>
+			// The scenarios, run after the app's script has executed.
+			const results = [];
+
+			function report(condition, description, detail = "") {
+				results.push(`${condition ? "ok  " : "FAIL"} ${description}`);
+
+				if (!condition && detail) {
+					results.push(`       ${detail}`);
+				}
+			}
+
+			const tick = () => new Promise((resolve) => window.setTimeout(resolve, 0));
+
+			const pane = () => document.getElementById("pane");
+			// Two readers, because they answer different questions. `text` is what the operator
+			// reads — and escaped markup appears in it *as markup*, which is the point of escaping
+			// and not a failure. `html` is what reached the DOM, and that is where a raw tag would
+			// be a defect. Reading text for the escaping checks made them assert the opposite of
+			// what they meant the first time this ran.
+			const field_text = (dialog, reader) =>
+				Object.values((dialog && dialog.fields_dict) || {})
+					.map((field) => field.$wrapper[reader]())
+					.join(" ");
+
+			const dialog_text = (index) => field_text(DIALOGS[index], "text");
+			const dialog_html = (index) => field_text(DIALOGS[index], "html");
+
+			async function load() {
+				for (let attempt = 0; attempt < 100; attempt += 1) {
+					if (FORM_HANDLERS["Logistics Settings"]) {
+						return true;
+					}
+
+					await new Promise((resolve) => window.setTimeout(resolve, 50));
+				}
+
+				return false;
+			}
+
+			async function run() {
+				report(await load(), "the page loaded the real Logistics Settings script");
+				report(
+					Boolean(FORM_HANDLERS["Logistics Settings"] && FORM_HANDLERS["Logistics Settings"][0].refresh),
+					"and captured its form hook"
+				);
+
+				const hook = FORM_HANDLERS["Logistics Settings"][0];
+				const reload = () => {};
+				const buttons = [];
+				const frm = {
+					reload_doc: reload,
+					add_custom_button: (label, action) => buttons.push({ label: label, action: action }),
+				};
+
+				// --- who sees which button ---------------------------------------------------------
+				const roles_of = (list) => list.slice();
+
+				frappe.user.has_role = (role) => roles_of(["Logistics Serial Manager"]).indexOf(role) >= 0;
+				buttons.length = 0;
+				hook.refresh(frm);
+				await tick();
+
+				report(
+					buttons.length === 2,
+					"a Manager who is not an archivist gets two buttons",
+					`buttons: ${buttons.map((button) => button.label).join(" | ") || "—"}`
+				);
+				report(
+					!buttons.some((button) => /تاریخچه/.test(button.label)),
+					"and the historical restore is not one of them"
+				);
+
+				frappe.user.has_role = (role) => roles_of(["Logistics Serial Manager", "Logistics Serial Archivist"]).indexOf(role) >= 0;
+				buttons.length = 0;
+				hook.refresh(frm);
+				await tick();
+
+				report(
+					buttons.length === 4,
+					"an archivist gets four",
+					`buttons: ${buttons.map((button) => button.label).join(" | ") || "—"}`
+				);
+				report(
+					buttons.some((button) => button.label === "بازآوری تاریخچهٔ فاکتورهای لغو‌شده"),
+					"including one labelled for the historical restore"
+				);
+				report(
+					buttons.some((button) => button.label === "بازآوری سابقه‌های انتقال"),
+					"and one for restoring the audit records themselves"
+				);
+				report(
+					!buttons.some((button) => button.label === "بازیابی اطلاعات سریال‌ها") === false,
+					"beside the ordinary restore rather than instead of it"
+				);
+
+				// --- a press asks for a file and writes nothing ------------------------------------
+				const history_button = buttons.find((button) =>
+					/تاریخچه/.test(button.label)
+				);
+
+				server.reset();
+				history_button.action();
+				await new Promise((resolve) => window.setTimeout(resolve, 50));
+
+				report(server.calls.length === 0, "pressing it writes nothing until a file is chosen");
+				report(server.applies.length === 0, "and applies nothing");
+
+				// --- the preview, driven directly --------------------------------------------------
+				// `pick_file` opens a native file chooser, which a harness cannot drive; the flow
+				// past it takes the file it would have produced.
+				const file = { name: "serials.json", content: '{"format":"smartprocess-logistics-serials"}' };
+
+				server.reset();
+				pane().innerHTML = "";
+				DIALOGS.length = 0;
+				shown.length = 0;
+
+				await preview(file, "history");
+				await tick();
+
+				report(
+					server.calls.length === 1 && server.calls[0].method === "preview_cancelled_serial_history",
+					"the historical preview asks the historical endpoint",
+					server.calls.map((call) => call.method).join(", ") || "—"
+				);
+				report(
+					server.calls[0].args.content === file.content,
+					"and sends the file the operator chose"
+				);
+				report(DIALOGS.length === 1, "it opens one dialog", `dialogs: ${DIALOGS.length}`);
+
+				const text = dialog_text(0);
+
+				report(text.indexOf("هشدار") >= 0, "carrying a warning", text.slice(0, 120));
+				report(
+					text.indexOf("لغو‌شده") >= 0,
+					"and the warning says the registrations go onto cancelled invoices"
+				);
+				report(
+					text.indexOf("۲ سابقهٔ انتقال") >= 0 || text.indexOf("2 سابقهٔ انتقال") >= 0,
+					"it says the file's transfer records are not restored either",
+					text
+				);
+				report(
+					text.indexOf("انجام نمی‌شود") >= 0,
+					"which in this mode is the true sentence",
+					text.slice(0, 200)
+				);
+				report(
+					text.indexOf("the-old-site") >= 0,
+					"and names the site the file came from"
+				);
+				report(
+					DIALOGS[0].options.primary_action_label === "بازآوری کن",
+					"its confirm button is labelled for this act, not for the ordinary one",
+					DIALOGS[0].options.primary_action_label
+				);
+				report(frozen.count === 0, "and the page is not left frozen", `frozen: ${frozen.count}`);
+
+				// --- confirming ------------------------------------------------------------------
+				DIALOGS[0].options.primary_action();
+				await new Promise((resolve) => window.setTimeout(resolve, 50));
+
+				report(
+					server.applies.length === 1 &&
+						server.applies[0].method === "restore_cancelled_serial_history",
+					"confirming applies to the historical endpoint",
+					server.applies.map((apply) => apply.method).join(", ") || "—"
+				);
+				report(
+					server.applies[0].args.token === "digest-of-the-file",
+					"with the token the preview it was looking at returned",
+					String(server.applies[0].args.token)
+				);
+				report(
+					server.applies[0].args.content === file.content,
+					"and the same file"
+				);
+				report(
+					shown.some((payload) => payload.title === "بازآوری تاریخچهٔ فاکتورهای لغو‌شده"),
+					"and the result is reported under this act's own title"
+				);
+				report(frozen.count === 0, "with the page left unfrozen", `frozen: ${frozen.count}`);
+
+				// --- the ordinary restore is untouched ---------------------------------------------
+				server.reset();
+				DIALOGS.length = 0;
+				shown.length = 0;
+
+				await preview(file, "live");
+				await tick();
+
+				report(
+					server.calls.length === 1 && server.calls[0].method === "preview_serial_restore",
+					"the ordinary preview still asks the ordinary endpoint",
+					server.calls.map((call) => call.method).join(", ") || "—"
+				);
+				report(
+					dialog_text(0).indexOf("هشدار") < 0,
+					"and carries no historical warning"
+				);
+				report(
+					DIALOGS[0].options.primary_action_label === "ثبت کن",
+					"its confirm button says what it always said",
+					DIALOGS[0].options.primary_action_label
+				);
+
+				DIALOGS[0].options.primary_action();
+				await new Promise((resolve) => window.setTimeout(resolve, 50));
+
+				report(
+					server.applies.length === 1 && server.applies[0].method === "apply_serial_restore",
+					"confirming applies to the ordinary endpoint",
+					server.applies.map((apply) => apply.method).join(", ") || "—"
+				);
+
+				// --- the audit records, and their own warning --------------------------------------
+				server.reset();
+				DIALOGS.length = 0;
+				shown.length = 0;
+
+				await preview(file, "records");
+				await tick();
+
+				report(
+					server.calls.length === 1 && server.calls[0].method === "preview_restore_audit_records",
+					"the records preview asks the records endpoint",
+					server.calls.map((call) => call.method).join(", ") || "—"
+				);
+
+				const records_text = dialog_text(0);
+
+				report(records_text.indexOf("هشدار") >= 0, "carrying a warning of its own");
+				report(
+					records_text.indexOf("بازآوری‌شده") >= 0,
+					"and saying what makes such a record different",
+					records_text.slice(0, 140)
+				);
+				report(
+					records_text.indexOf("2 سابقهٔ انتقال") >= 0 ||
+						records_text.indexOf("۲ سابقهٔ انتقال") >= 0,
+					"and how many the file holds"
+				);
+				// The sentence about the records differs by mode, and this is the mode that places
+				// them: a preview that said "they are not restored" here would contradict the button
+				// underneath it. Measured both ways — the historical mode's own check below asserts
+				// the opposite sentence, so one of the two fails if the branch is ever fixed open.
+				report(
+					records_text.indexOf("انجام نمی‌شود") < 0,
+					"and it does not say the records are left alone, because this mode places them",
+					records_text.slice(0, 200)
+				);
+				report(
+					records_text.indexOf("بازآوری می‌شود") >= 0,
+					"it says how many of them it will place"
+				);
+				report(
+					DIALOGS[0].options.primary_action_label === "بازآوری کن" &&
+						DIALOGS[0].options.title === "بازآوری سابقه‌های انتقال",
+					"its confirm and its title are this act's own",
+					DIALOGS[0].options.title
+				);
+
+				DIALOGS[0].options.primary_action();
+				await new Promise((resolve) => window.setTimeout(resolve, 50));
+
+				report(
+					server.applies.length === 1 && server.applies[0].method === "restore_audit_records",
+					"confirming applies to the records endpoint",
+					server.applies.map((apply) => apply.method).join(", ") || "—"
+				);
+				report(
+					shown.some((payload) => payload.title === "بازآوری سابقه‌های انتقال"),
+					"and the result is reported under it"
+				);
+				report(frozen.count === 0, "and the page is left unfrozen", `frozen: ${frozen.count}`);
+
+				// --- an unknown mode is the ordinary one, not a third thing -------------------------
+				server.reset();
+				DIALOGS.length = 0;
+
+				await preview(file, "something-else");
+				await tick();
+
+				report(
+					server.calls[0].method === "preview_serial_restore",
+					"a mode the script does not know falls back to the ordinary restore",
+					server.calls[0].method
+				);
+
+				// --- a refusal is reported, and no dialog claims otherwise --------------------------
+				server.reset();
+				server.preview = { source_site: "the-old-site" }; // no token
+				DIALOGS.length = 0;
+				shown.length = 0;
+
+				await preview(file, "history");
+				await tick();
+
+				report(DIALOGS.length === 0, "a preview that did not arrive whole opens no dialog");
+				report(
+					shown.some((payload) => String(payload.message || "").indexOf("پیش‌نمایش") >= 0),
+					"and says the preview did not arrive",
+					JSON.stringify(shown)
+				);
+				report(frozen.count === 0, "and releases the page", `frozen: ${frozen.count}`);
+
+				// --- escaping ----------------------------------------------------------------------
+				server.reset();
+				server.preview = {
+					...HISTORY_PREVIEW,
+					source_site: '<img src=x onerror=alert(1)>',
+					// The closing tag is written `<\/script>` on purpose: an HTML parser ends a
+					// script element at the first `</script`, inside a string or not, and the
+					// literal one turned the rest of this page into text the first time it ran.
+					sample: [
+						{
+							row: "<script>bad()<\/script>",
+							message: "<b>bold</b>",
+							detail: '"onmouseover=x',
+						},
+					],
+				};
+				DIALOGS.length = 0;
+
+				await preview(file, "history");
+				await tick();
+
+				const rendered = dialog_html(0);
+
+				report(rendered.length > 0, "the dialog rendered something to check", rendered.slice(0, 80));
+				report(!/<img|<script/i.test(rendered), "no tag from the file survives into the DOM");
+				report(rendered.indexOf("&lt;img") >= 0, "it is written as text instead");
+				report(rendered.indexOf("<b>bold</b>") < 0, "nor does markup in a conflict's message");
+				report(rendered.indexOf("onerror=") >= 0, "and the readable text still says what it said");
+				report(!/<[^>]*onerror/i.test(rendered), "with no event handler inside a tag");
+				report(frozen.count === 0, "and that path releases the page too", `frozen: ${frozen.count}`);
+
+				// --- the script decides no policy, and writes through one caller -------------------
+				const source = await (await fetch(`${STATION_BASE}/js/logistics_settings_transfer.js${BUST}`)).text();
+
+				report(!/CANCELLED_|policy/.test(source), "the script names no policy of its own");
+				report(source.indexOf("apply_serial_restore") >= 0, "it calls the ordinary apply by name");
+				report(
+					source.indexOf("restore_cancelled_serial_history") >= 0,
+					"and the historical apply by name"
+				);
+				// `.call({` and not `frappe.call(`: the preview and the apply are written as
+				// `frappe` newline `.call({`, so the joined string appears once and the count was
+				// 1 where the code has three. Counting the method is counting the requests.
+				report(
+					(source.match(/\.call\(\{/g) || []).length === 3,
+					"every request it makes goes through frappe.call",
+					`calls: ${(source.match(/\.call\(\{/g) || []).length}`
+				);
+				report(
+					!/XMLHttpRequest|window\.fetch\(|navigator\.sendBeacon/.test(source),
+					"and it opens no transport of its own"
+				);
+				report(
+					source.indexOf("endpoints.export_serials") >= 0 &&
+						source.indexOf("preview_serial_restore") >= 0 &&
+						source.indexOf("apply_serial_restore") >= 0 &&
+						source.indexOf("preview_cancelled_serial_history") >= 0 &&
+						source.indexOf("restore_cancelled_serial_history") >= 0,
+					"all four endpoints are named, and the export"
+				);
+			}
+
+			run()
+				.catch((error) => {
+					results.push(`FAIL the harness stopped: ${(error && error.message) || error}`);
+				})
+				.then(() => {
+					const bar = document.getElementById("results");
+					const failed = results.filter((row) => row.startsWith("FAIL")).length;
+
+					bar.textContent = `${results.join("\n")}\n\n${
+						failed ? `FAIL (${failed} of ${results.length})` : `PASS (${results.length} checks)`
+					}`;
+					bar.style.borderColor = failed ? "#e03636" : "#29cd42";
+					window.harness_results = results;
+				});
+		</script>
+	</body>
+</html>

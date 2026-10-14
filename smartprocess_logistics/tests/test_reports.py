@@ -18,7 +18,6 @@ from smartprocess_logistics.core.quantities import required_units
 from smartprocess_logistics.core.reports import (
 	CODE_BAD_DATE_RANGE,
 	CODE_BAD_PAGE,
-	CODE_NOT_INSTALLED,
 	CODE_NO_CONDITION,
 	CODE_UNSAFE_CONDITION,
 	DEFAULT_PAGE_LENGTH,
@@ -37,12 +36,9 @@ from smartprocess_logistics.core.reports import (
 	build_register_query,
 	check_permission_conditions,
 	describe_reports,
-	missing_report_available,
 	required_units_sql,
 )
 from smartprocess_logistics.tests.base import UnitTestCase
-
-INSTALLED = datetime(2026, 10, 12, 18, 30)
 
 ANYONE = Principal(user="viewer@example.com", roles=frozenset({ROLE_VIEWER}))
 ALPHA_VIEWER = Principal(
@@ -78,17 +74,21 @@ def register(
 	)
 
 
+def where_of(query):
+	"""The conditions of a statement, without its select list or its ordering."""
+
+	return query.sql.split("WHERE", 1)[1].split("ORDER BY")[0]
+
+
 def missing(
 	*,
 	filters=None,
 	principal=ANYONE,
-	installed_on=INSTALLED,
 	permission_conditions=PERMISSION,
 ):
 	return build_missing_query(
 		MissingFilters(**(filters or {})),
 		principal,
-		installed_on=installed_on,
 		permission_conditions=permission_conditions,
 	)
 
@@ -122,9 +122,9 @@ class TestParameterization(UnitTestCase):
 		query = register(filters={"customer": "CUST' OR 1=1 --"})
 		register_missing = missing(filters={"customer": "CUST' OR 1=1 --"})
 
-		for query in (query, register_missing):
-			with self.subTest(query=query.sql[:20]):
-				self.assertNotIn("OR 1=1", query.sql)
+		for built in (query, register_missing):
+			with self.subTest(query=built.sql[:20]):
+				self.assertNotIn("OR 1=1", built.sql)
 
 	def test_the_missing_query_carries_its_values_as_parameters(self):
 		query = missing(filters={"item_code": "ITEM-1", "from_date": "2026-10-01"})
@@ -133,12 +133,17 @@ class TestParameterization(UnitTestCase):
 		self.assertEqual(query.params["from_date"], "2026-10-01")
 		self.assertNotIn("ITEM-1", query.sql)
 
-	def test_the_installation_timestamp_is_a_parameter(self):
+	def test_no_installation_timestamp_reaches_the_statement(self):
+		"""The boundary that was removed: nothing about the app's install belongs in this query.
+
+		The invoice's creation time is still *selected* — it is the column that shows how old an
+		invoice is, which is what auditing history needs. What it must never be is a condition.
+		"""
 		query = missing()
 
-		self.assertIn("%(installed_on)s", query.sql)
-		self.assertEqual(query.params["installed_on"], INSTALLED)
-		self.assertNotIn("2026-10-12", query.sql)
+		self.assertNotIn("installed_on", query.sql)
+		self.assertNotIn("installed_on", query.params)
+		self.assertNotIn("si.creation", where_of(query))
 
 	def test_the_company_list_becomes_one_placeholder_per_company(self):
 		query = register(principal=TWO_COMPANIES)
@@ -237,7 +242,7 @@ class TestInvoicePermissions(UnitTestCase):
 
 	def test_a_missing_report_also_requires_conditions(self):
 		with self.assertRaises(ReportError):
-			build_missing_query(MissingFilters(), ANYONE, installed_on=INSTALLED, permission_conditions=None)
+			build_missing_query(MissingFilters(), ANYONE, permission_conditions=None)
 
 
 class TestPaging(UnitTestCase):
@@ -277,25 +282,34 @@ class TestPaging(UnitTestCase):
 		self.assertEqual((query.limit, query.offset), (10, 30))
 
 
-class TestInstallationTimestamp(UnitTestCase):
-	def test_the_report_is_unavailable_without_a_timestamp(self):
-		for value in (None, "", 0):
-			with self.subTest(value=value):
-				self.assertFalse(missing_report_available(value))
+class TestNoInstallationBoundary(UnitTestCase):
+	"""The report covers every invoice, and no timestamp can change that.
 
-	def test_the_report_is_unavailable_and_says_so(self):
-		with self.assertRaises(ReportError) as caught:
-			missing(installed_on=None)
+	It used to cover only invoices created at or after `Logistics Settings.installed_on`, which
+	left every older invoice unaudited however short it was. What decides a shortage now is the
+	item's own flag, read when the report runs, which says nothing about when the invoice was
+	written — so an invoice from before the app was installed is a row like any other, and stays
+	one across an upgrade, a reinstall, a restore, a move to another server, or a change to that
+	timestamp. The statement is available unconditionally: there is nothing left to be missing.
+	"""
 
-		self.assertEqual(caught.exception.code, CODE_NOT_INSTALLED)
+	def test_the_report_is_always_available(self):
+		self.assertTrue(missing().is_single_statement())
 
-	def test_a_timestamp_makes_the_report_available(self):
-		self.assertTrue(missing_report_available(INSTALLED))
+	def test_no_creation_date_condition_is_in_the_statement(self):
+		"""It is a selected column, never a filter: an old invoice is a row like any other."""
+		query = missing()
 
-	def test_the_eligibility_rule_is_in_the_statement(self):
-		self.assertIn("si.creation >= %(installed_on)s", missing().sql)
+		self.assertIn("si.creation AS invoice_created", query.sql)
+		self.assertNotIn("si.creation", where_of(query))
 
-	def test_the_register_report_needs_no_timestamp(self):
+	def test_no_settings_row_is_read_for_it(self):
+		"""A missing or edited install marker cannot empty the report any more."""
+		for filters in ({}, {"only_incomplete": False}, {"docstatuses": (1,)}):
+			with self.subTest(filters=filters):
+				self.assertTrue(missing(filters=filters).is_single_statement())
+
+	def test_the_register_report_needs_no_timestamp_either(self):
 		self.assertTrue(register().is_single_statement())
 
 
@@ -467,6 +481,59 @@ class TestOrdering(UnitTestCase):
 	def test_the_statement_is_reproducible(self):
 		self.assertEqual(register().sql, register().sql)
 		self.assertEqual(missing().sql, missing().sql)
+
+
+class TestTheRegistrationSideOfTheReport(UnitTestCase):
+	"""The ways a row with no registrations could silently disappear from its own report.
+
+	`Sales Invoice Item` is joined INNER — a row always has its item — while the registrations are
+	joined LEFT, from one grouped subquery, and read through `COALESCE`. Written the other way
+	round, the invoice whose serials were never registered — the exact case this report exists to
+	find — would be filtered out by the join that was meant to count it, and a row carrying three
+	registrations would be counted once per registration. Neither mistake is visible in a query
+	that returns rows, which is why the shape is stated here. Executing it against a database is
+	what `deployment/lab/verify_missing_report.py` does.
+	"""
+
+	def test_registrations_are_left_joined_so_a_row_with_none_is_still_a_row(self):
+		query = missing()
+
+		self.assertIn("LEFT JOIN (", query.sql)
+		self.assertIn("GROUP BY sales_invoice, sales_invoice_item", query.sql)
+
+	def test_no_inner_join_reaches_the_registration_table(self):
+		self.assertNotIn("INNER JOIN `tabLogistics Serial Assignment`", missing().sql)
+
+	def test_the_registration_count_is_read_through_coalesce(self):
+		"""`NULL` from the join is a row that has no registrations, and it must count as zero."""
+		self.assertIn("COALESCE(a.registered, 0) AS registered", missing().sql)
+
+	def test_the_count_is_per_invoice_item_row_not_per_item(self):
+		"""Two rows of one item on one invoice are two rows here, each with its own count."""
+		query = missing()
+
+		self.assertIn("sii.name AS sales_invoice_item", query.sql)
+		self.assertIn("a.sales_invoice_item = sii.name", query.sql)
+
+	def test_an_item_that_does_not_require_a_serial_is_out_of_the_report(self):
+		"""The boundary the report may cover, as a decision rather than an accident.
+
+		An item that never required a serial cannot be short of one, however many serials an
+		operator registered on it by hand — registration is deliberately not limited by this flag.
+		"""
+		self.assertIn("i.sp_serial_required = 1", missing().sql)
+
+	def test_a_row_that_is_complete_is_hidden_only_by_the_incomplete_filter(self):
+		"""The only thing that removes a complete row is the filter, not the statement."""
+		with_filter = missing(filters={"only_incomplete": True}).sql
+		without = missing(filters={"only_incomplete": False}).sql
+
+		self.assertIn("COALESCE(a.registered, 0) <", with_filter)
+		self.assertNotIn("COALESCE(a.registered, 0) <", without)
+
+	def test_the_requirement_is_counted_by_magnitude(self):
+		"""A credit note carries a negative quantity and still needs a label per unit."""
+		self.assertIn("ABS(sii.qty)", missing().sql)
 
 
 class TestQueryValue(UnitTestCase):

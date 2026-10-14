@@ -230,8 +230,29 @@ def split_tokens(text, delimiters, max_tokens=MAX_TOKENS):
 
 # Separators an operator types between serials in a box, on top of the configured delimiters.
 # They are written in the same two-character stored form the settings table uses — `\\n`, `\\t` —
-# because that is the form `DelimiterSet.of` interprets.
-TYPED_SEPARATORS = (",", ";", "،", "\\r\\n", "\\n", "\\t")
+# because that is the form `DelimiterSet.of` interprets. Both commas and both semicolons are here:
+# a list is separated by habit with whichever of them the keyboard produced, and a site that
+# disabled one of them in its settings did not mean "and so this cannot be a list any more".
+TYPED_SEPARATORS = (",", ";", "؛", "،", "\\r\\n", "\\n", "\\t")
+
+
+def served_delimiters(stored_delimiters):
+	"""The separators to hand the scan window, or none at all.
+
+	The same decision `core.scan.served_next_row_command` makes about its own value, and for the
+	same reason: a stored delimiter this site cannot read is a problem with that field, and refusing
+	to describe the invoice because of it would take the operator's work away over something they
+	cannot even see. An empty answer means the window splits a paste on the separators a clipboard
+	actually carries — its documented fallback — rather than the window failing to open.
+
+	The answer is the **interpreted** separators, not the stored escapes: `\\s` is served as the
+	space it stands for, so the window splits on the characters this site splits on instead of
+	interpreting the settings table's notation for itself.
+	"""
+	try:
+		return DelimiterSet.of(tuple(stored_delimiters) + TYPED_SEPARATORS).as_list()
+	except DelimiterError:
+		return ()
 
 
 def split_typed_list(text, delimiters, max_tokens=MAX_TOKENS):

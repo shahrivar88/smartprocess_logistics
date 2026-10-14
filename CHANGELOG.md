@@ -5,6 +5,159 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 — 2026-10-15
+
+**The release candidate: run against a real site, not installed on `SmartProcessERP` and not
+migrated there.** Everything below has been exercised end to end on the isolated lab
+(`sp_logistics_lab`) and nowhere else. Not installed on a live site means exactly that: the two
+DocTypes do not exist on `SmartProcessERP`, and nothing in this section has run there. Phase 19
+executed all eight phases of `docs/integration-test-plan.md` on the isolated lab
+(`sp_logistics_lab`, port 8095): the two DocTypes migrate creates, the four roles, a submitted
+record that refuses to be changed or deleted, an eighteen-serial transfer onto an amendment with
+the cancelled invoice left untouched, ten places contested by two processes, the historical
+restore against the ordinary one, and the audit records placed from an archive. The run found four
+defects — three of which no database-free suite could reach — and all four were fixed and re-run
+inside it. What it did **not** do is the uninstall/reinstall cycle of phase 7, whose removal and
+reinstall steps belong to a person, and nothing here has been installed on or migrated into
+`SmartProcessERP`. See `docs/test-manifest.md`, phase 19.
+
+### Added
+
+- **A cancelled invoice's serials can be moved onto its amendment.** When ERPNext cancels an
+  invoice and amends it, it keeps the cancelled document and its registrations and gives the
+  amendment **new** item rows — so the serials a warehouse scanned sit on a document that is now
+  history, and the amendment reads as a shortage. «انتقال سریال» on an amended invoice offers to
+  move them: a preview of what would happen to every serial, the operator's selection, an explicit
+  confirmation, and a result.
+- **Nothing is lost moving it.** The cancelled invoice is never written to — its registrations are
+  read, named in the record, and left exactly as they were. Every serial it held comes out placed,
+  refused with a reason, or left because the operator did not select it, and the record says which.
+  What does not fit (an amendment that invoices less than its predecessor) is the ordinary case
+  rather than a failure, and each such serial is named with its reason.
+- **`Logistics Serial Transfer`** and its child: a submitted record of what was done, one row per
+  serial, naming the source registration, the target row, the outcome and the reason. It cannot be
+  rewritten or deleted — by any role, by the Administrator included — because the framework refuses
+  both for a submitted document, and no role holds `write`, `delete`, `cancel` or `amend` on it.
+- **A serial live on another active invoice is a warning, not an error.** The operator is told and
+  has to acknowledge it, and the acknowledgment is recorded. This app has never had a site-wide
+  uniqueness rule over serial text, and inventing one now would call the operator's own existing
+  data a conflict.
+- **`core/transfer.py`**: every rule of the above as a pure function over plain data, with no
+  Frappe import — the gates, the placement, the three-way outcome, the audit record and the values
+  written to the amendment.
+
+
+- **The historical restore has a button.** «بازآوری تاریخچهٔ فاکتورهای لغو‌شده» on
+  `Logistics Settings`, shown only to a holder of `Logistics Serial Archivist`, with its own
+  preview, a warning that says what it does before the operator confirms, and a result reported
+  under its own title. It is a button of its own rather than a mode of the ordinary one: an
+  operator who means the ordinary restore must not be one click from an act that writes to
+  cancelled invoices.
+- **An archive of transfer records must agree with itself.** `core.export.check_transfer_records`
+  refuses a file whose rows name a record it does not contain, whose counts do not equal its own
+  rows, whose outcomes do not add up to its source total, or whose rows contradict their own
+  result — none of which a recomputed digest can catch. Read on both previews and both restores,
+  so a hand-made archive is refused before anything is planned.
+- **`docs/integration-test-plan.md`**: the isolated run this app has never had, in eight phases.
+
+
+- **The audit records can be restored, and a restored record says so.** `restored_from`,
+  `restored_on` and `restored_by` are written by the third restore and by nothing else, so an
+  original record carries them empty. The record's *act* still belongs to whoever performed it —
+  `creation` and `owner` travel from the file, as every restore does — and the marker is what makes
+  the document a restored one rather than one that claims an act happened here.
+- **A name collision is refused, and nothing is overwritten or renamed.** The naming series is per
+  site (`LST-.YYYY.-.#####`), so two sites both produce `LST-2026-00001` for different transfers.
+  Such a record is reported as `RECORD_EXISTS`, with its name. Overwriting would destroy an audit
+  record; renaming would lose the identity the archive exists to carry.
+- **A record is placed whole, or not at all.** Every obstacle is found before a single write — a
+  taken name, a target invoice that is missing or has since been cancelled, a row whose serial is
+  not on this site — so an operator learns what stands in the way rather than watching a file half
+  apply. A record missing a row would be a record that lies, so one blocked row blocks the record.
+- **«بازآوری سابقه‌های انتقال»** on `Logistics Settings`, for a holder of
+  `Logistics Serial Archivist`, with its own preview and its own warning.
+- **`core.export.MODES`**: the three restores as three named modes — an assignment on a live
+  invoice, an assignment on a cancelled one, a transfer record — instead of a growing set of
+  switches. They are disjoint, so which restore this is is answered by the mode rather than by
+  reading a combination of flags.
+
+### Changed
+
+- **The export format is version 2.** A document now carries the transfer records and their rows,
+  beside the serials and the assignments. They are carried because an uninstall drops their tables
+  and this file is what survives the removal. The two *assignment* restores still place none of
+  them and report only how many the file holds — so a site with a thousand transfers does not
+  preview a thousand conflicts — and placing them is the third restore's own, separately authorized
+  job. A version 1 file is read exactly as it always was; its absent sections count as empty, and a
+  version 1 file that has lost a section it *does* declare is still refused.
+- **I22 has one exception, named and gated.** A cancelled invoice could not be added to by any
+  path. It can now, by exactly one pair of endpoints — `preview_cancelled_serial_history` and
+  `restore_cancelled_serial_history` — and only for rows whose invoice is cancelled; a row on a
+  live invoice is reported as `NOT_HISTORY` and left to the ordinary restore, so the pair is not a
+  superset of it. Both ask for the new `Logistics Serial Archivist` role **on top of** a Manager
+  level, so a site with several Managers decides which of them may do this. The ordinary restore is
+  unchanged and pinned by its own tests.
+- **The refusal sentence points at the way out.** A cancelled-invoice row reported by the ordinary
+  preview now names the endpoint that can place it, because a file the operator cannot use and no
+  explanation is the version of this that helps nobody.
+
+### Fixed
+
+- **A collision used to be reported as a concurrency failure.** Two sites both numbering from
+  `LST-2026-00001` met on the primary key, and the sentence the ordinary restore printed was
+  «هم‌زمان درخواست دیگری…» — which invites a retry that can never succeed. The collision has its
+  own reason now, and the pre-flight finds it before the write.
+- **The preview's line about transfer records contradicted the button.** It said they are not
+  restored, in all three modes — including the one that restores them.
+- **The two navigation files were deleted by every `bench migrate`.** `remove_orphan_entities`
+  looks for an app-level `Workspace Sidebar` or `Desktop Icon` at `<folder>/<scrub(name)>.json`
+  and deletes the record when that path is missing, so a Latin file name under a Persian document
+  name lost the app's sidebar and its icon — measured on the lab, where the records were imported
+  on install and removed on the first migrate. Both files are now named after their documents,
+  as `frappe.scrub` produces them, and a test pins the rule.
+- **The second preview of a transfer crashed on a target that already held registrations.**
+  `gateway.read_target_rows` counted through a helper written for row *dicts* and handed it
+  `ExistingAssignment` objects, so `AttributeError` — but only when the amendment already carried
+  a serial, which every test of this feature had avoided by previewing against an empty one. Found
+  by pressing the button twice in a row, on the lab.
+- **A restricted caller restoring a file that named another company's serial lost the whole
+  request.** The serial was invisible in that caller's world — the only assignment carrying it is
+  in a company they cannot see — so the planner called the master new and inserted it, colliding
+  on the primary key of `Logistics Serial`. The sentence the operator saw was the one for a
+  concurrent request. `core.export.World` now carries the **names** the document mentions, which
+  cannot be scoped to a company and are unique over the site, and a name that is taken is a serial
+  this site already has.
+- **A restored audit record could be asked to arrive as a draft.** The record's `docstatus`
+  travels in the file, and neither the archive validator nor the plan questioned it — so a
+  hand-made file, sealed again with a digest computed *from itself*, could place a record at
+  `docstatus = 0`, which is the one state I24 exists to prevent: a draft can be edited and
+  deleted. The validator refuses such a file whole (a fifth rule, beside the four it already
+  checked), and the plan writes the submitted value rather than carrying the file's.
+- **Four endpoints read the site's settings before they were authorized.** Every one of them
+  carried a comment saying nothing this app reads on behalf of a request is read before the
+  request is allowed; the settings row — read for the serial-length policy, never to decide
+  whether the caller may act — was read anyway, in `get_serial_assignments`, `set_row_serials`,
+  `add_row_serial` and `add_row_serials`, and in `_transfer_request` for both transfer endpoints.
+  The read now happens after the check, which is a rule the tests enforce rather than a promise
+  the comments make: `test_no_endpoint_reads_the_site_settings_before_it_is_authorized` compares
+  the two line numbers for every endpoint and every helper.
+- **The names a file mentions were read from one section too few.** `core.export.world_names`
+  tells the gateway which documents the plan is about, and it took them from the serial and
+  assignment rows only — so a file whose assignment section was empty (a site whose registrations
+  have since been removed, which is exactly what a recovery is for) named no invoice at all, and
+  every audit record came back `INVOICE_MISSING` with its amendment sitting on the site. Found in
+  the recovery rehearsal, where a file was built to place a record; the records' own
+  `source_invoice`/`target_invoice` and company are named now, and a test pins it.
+- **A record name held by another company was reported as a concurrent request.** The pre-flight
+  can only see the record names of the caller's own companies — that is the disclosure policy, not
+  an oversight — so a name from anywhere else arrived at the insert and collided there, where the
+  sentence was the one for a race: an invitation to retry something that can never succeed. The
+  records' insert now has its own handler and says the name is taken.
+- **`preview_restore_audit_records` answered `EXPORT_BAD_SHAPE` for every file.** The records mode
+  refuses a document with no restore marker, and the shared preview helper built its plan without
+  one, so the third restore could never be reached through the API: the button's preview always
+  failed and the apply behind it was unreachable. The preview passes the same stamp the apply does.
+
 ## 0.3.0 — 2026-10-14
 
 The app's records can now leave the site whole and come back whole: two buttons on
@@ -14,6 +167,34 @@ permanent in-database archive that 0.2.0 added is removed, and that is the point
 
 ### Release notes
 
+- **The serial window is a scan station now.** «ثبت سریال» opens one column per invoice item row
+  — model, required, registered and remaining, a standing input, one cell per serial with its own
+  delete icon, and a green tick when a column completes — instead of a row of boxes. It writes one
+  serial per request through the new `add_row_serial`, which **adds** to the row rather than
+  replacing it: two operators scanning the same invoice no longer overwrite each other's labels.
+  A column's completion makes one short chime, switchable per user; a refused label keeps its text
+  and shows the server's own sentence.
+- **The stuck «در حال ثبت...» overlay is fixed at the root.** The dialog used
+  `frappe.dom.freeze`/`unfreeze`, which is counter-based: `unfreeze()` returns early when the
+  counter is zero, so a single unpaired `freeze()` — reachable from a scan arriving while another
+  was in flight, from a chain whose work threw before returning a promise, or from the form
+  reloading mid-write — left the counter above zero and the overlay over the page until a reload.
+  The station keeps its own busy state now, released from a `finally` that cannot be skipped, and
+  it shows progress over itself rather than over the page.
+- **An operator must be able to read the invoice.** The station's every call passes
+  `gateway.assert_can_read_invoice`, so its user needs a role that grants read on `Sales Invoice`
+  (`Accounts User` or `Accounts Manager`, measured; `Sales User` alone is not enough on a current
+  ERPNext) as well as a Logistics role.
+- **Historical invoices are audited again.** The missing-serial report covered only invoices
+  created at or after `Logistics Settings.installed_on`, so every invoice older than the app was
+  left out of it however short it was — measured on the test site, where two such invoices holding
+  twenty-four registrations between them could not appear at all. That timestamp is no longer read
+  by reporting: what makes a row a shortage is its item's `sp_serial_required` flag, which says
+  nothing about when the invoice was written, so coverage survives an upgrade, a reinstall, a
+  restore, a move to another server, and any change to the install marker. `core.eligibility` now
+  states that rule — marked items are mandatory, unmarked ones are optional and can never be short
+  — and the scan window reads it too: an unmarked column is labelled «اختیاری» and never turns
+  green or rings, which is the same reason the report would never have listed it.
 - **Why the archive went.** 0.2.0 kept the records in tables of its own so that they would survive
   a removal, and it worked. It was also a second mechanism claiming to be the truth about the same
   history that a site's own backup already holds, and two such mechanisms eventually disagree —
@@ -36,6 +217,58 @@ permanent in-database archive that 0.2.0 added is removed, and that is the point
 
 ### Added
 
+- **A workbook in the repository, so the reading order is pinned by something every checkout has.**
+  `tests/fixtures/synthetic-workbook.xlsx` is the operator's own file's *shape* with values that
+  belong to nobody — a stray cell in the first column, and `*1`, `*2`, `*3` over five, ten and
+  twenty values, three of them stored as numbers and one as text that looks like a number.
+  `TestTheSyntheticWorkbook` asserts its column-by-column reading exactly, and the node and browser
+  checks are built from the same values, so the three suites read one file. The operator's own
+  workbook is still checked when it is on the machine, as an optional test that asserts its shape
+  and not its serials.
+- `add_row_serials` — one row's labels added in one request, accepted whole or refused whole,
+  through the same rule set as a single label. The station's save uses it, so a column is one round
+  trip rather than one per label; the refusal names the serials it is about, because a batch's
+  refusal has to say which label to remove. `core.orchestration.build_append_plan` takes a tuple
+  now, so one rule serves one label and twenty.
+- **One intake, three ways in.** A scanned label, a pasted list and an imported file now meet at
+  one `intake` in the station: it splits what a list is, reads the two commands, judges each serial
+  on its own, refuses the duplicates this invoice already holds, and stages the rest in the columns.
+  Nothing writes but the one «ذخیره سریال‌ها», through `add_row_serials`, and it writes what the
+  columns held when it was pressed.
+- **`#N` is the same command as `*N`.** Both select the invoice row the columns show as `#N`, and
+  `N` is any positive whole number. A number the invoice has no row for is answered with a sentence
+  and moves nothing: the values after it stay where they were.
+- **A workbook is read column by column, top to bottom, and only where it holds something.** The
+  server used to route a file by the marker patterns in `Logistics Settings` and hand the window a
+  row per serial; it now returns the file's nonempty cells as values — `A1…An, B1…Bn, …` — and the
+  window runs them through the same intake a paste goes through, so `#2` in the first cell of a
+  column reaches the serials beneath it and nothing else. Blank cells are not values, not counted
+  and never refused for: a worksheet formatted to its bottom is read for the data in it, and the
+  work of looking is bounded by `max_scanned_cells` rather than by the content limits.
+- **Reading a file no longer writes.** `prepare_import_preview` answered with a stored session that
+  `confirm_import` could apply; it now answers with values and stores nothing, so the site's
+  `Logistics Import Session` table stops growing every time somebody looks at a file. The session
+  machinery and `confirm_import` remain as the API they always were, unreachable from the window.
+- **The column heading is `Item.item_name`, on one line, clipped at its start.** A long model name
+  keeps its end — the lens size and the suffix that tell two cameras apart — and the whole name is
+  in the tooltip.
+- **Clipboard paste.** A pasted list is split by the separators this site actually uses — served
+  with the invoice, interpreted by `core.delimiters.served_delimiters` — staged into the columns,
+  and reported per token: the valid pieces go in, the duplicate and the impossible ones are named
+  and dropped. `*N` names an invoice row and the site's own next-column command moves the cursor,
+  both only as a whole token.
+- **A file import no longer writes.** The preview's serials are staged into the same columns, the
+  surplus is red there, and removing one is removing a pending cell — so the file path has no
+  confirm step, no second write path and no set-aside round trip left to keep in step with the
+  scanner. `prepare_import_preview` lost the `exclude` parameter and the preview table, and the
+  window keeps no session.
+- **The Save button cannot be left disabled.** A call that failed *before* it returned a promise
+  never attached a `finally`, so the busy flag it had already set stayed set and the window showed
+  «در حال ثبت…» until it was reloaded. Every async action in the window now runs through a helper
+  whose promise exists before the work does, and the save snapshots the columns at the moment it is
+  pressed, so the fix cannot change what a save writes.
+- `deployment/lab/probe_user_workbook.py`: a real workbook with a `printerSettings` part, through
+  the whole preview — preflight, parse and placement — with no site involved.
 - `core/export.py` — the format, its versioning, its digest, the row projection and the import
   planner. Pure: no Frappe import, so every rule is testable without a site, including the one
   that keeps the format lossless.
@@ -51,6 +284,57 @@ permanent in-database archive that 0.2.0 added is removed, and that is the point
 
 ### Changed
 
+- **Only the invoice's serial rows are in the dialog, and one rule decides every colour.** Two
+  different questions used to be asked of one row — *required* against *merely permitted* — and
+  answered with two vocabularies: a required column was green when the server called it complete,
+  and an unmarked row was a column of its own with an «اختیاری» label, never complete, and a second
+  green of its own for being populated. Now a row whose item is not marked `sp_serial_required` is
+  **not a serial row**: it is not served, so it is not drawn, not navigated to, and no paste,
+  import, scan or `*N` can put a label on it — a command naming it is answered with a sentence
+  naming the row, and never obeyed by a different one. The served rows keep the **invoice's own row
+  numbers**, so a hidden row leaves a gap rather than renumbering the rest.
+- **The four states are one machine.** `core.eligibility.row_state` — and the window's copy of it,
+  which counts the labels the operator has in hand as well as the ones in the database — answers
+  with exactly one of `INCOMPLETE` (gray), `STAGED` (green: exactly what the row needs, part of it
+  unsaved), `SAVED` (blue: exactly what it needs, all of it written) or `CONFLICT` (red: more than
+  the invoice allows, decided first). Every card is painted from it and nothing else: the tick, the
+  chime and the «کامل» chip follow `SAVED`, and a second opinion about what "done" means no longer
+  exists anywhere in the app. Saving turns green into blue from the server's own answer — the
+  pending labels leave only when the row comes back — and scanning into a saved row, removing a
+  label in hand, or clearing a column recomputes the state immediately.
+- **A row that stops being marked keeps everything on it.** Nothing is deleted, rewritten or
+  hidden: an unmarked row's registrations stay in `Logistics Serial Assignment`, are counted in the
+  payload (`ineligible_rows`, `ineligible_registered`) and shown as a chip, are listed by
+  `get_serial_assignments` and in the Desk list, and `delete_assignments` still removes them, because
+  the refusal is about **adding** a label. Measured on the operator's own invoice: `IN-260025` row 3
+  is unmarked and carries 18 registrations, and the endpoint answers with two served rows and one
+  ineligible row reporting those 18 — while `get_serial_assignments` still returns all 33 of that
+  invoice's assignments.
+- **The serial toolbar is one button again.** A Sales Invoice carried a «سریال‌ها» dropdown holding
+  «ثبت سریال» beside a read-only «جزئیات سریال‌ها» entry, so reaching the window the operator always
+  wants took two clicks and a menu. The dropdown is gone and the button's own label is «سریال‌ها»:
+  one left-click opens the station, through the same `open_serial_dialog` it always used — no second
+  registration path, no copy of the dialog. Everything the button was gated on is unchanged: the
+  Editor role, the settings switch, the acting user's company permissions and an uncancelled
+  invoice, and the framework reuses a button by its label so a refresh cannot draw a second one.
+  The details window it used to open is untouched and simply no longer has a toolbar entry — a
+  Viewer therefore sees no button at all, which is the consequence of removing the entry that was
+  the only one they could act on.
+- **A scanning burst with no terminator files one label per scan and never glues two together.** A
+  keyboard wedge configured without an Enter or a Tab produced one unbroken run of `input` events,
+  and the second label was being appended to the first. The window now measures the run instead of
+  sleeping through it: `WEDGE_MIN_LENGTH` characters within `WEDGE_BURST_MS` followed by
+  `WEDGE_SETTLE_MS` of quiet is a scan, so two scans are two labels and a human typing is left
+  alone. Measured at 1.0–1.6 ms per scan into one column against 2.8 ms before, and a label the
+  scanner *did* end is still taken the instant it is ended.
+- An Enter that ends an IME composition is not a scan. The guard had been written against
+  `event.isComposing`, which jQuery does not copy into the event it hands a delegated handler, so
+  it never fired and a half-composed Persian word was filed as a serial. It reads
+  `event.originalEvent.isComposing` now, and `keyCode === 229` is the fallback where that is not
+  reported at all.
+- A save that is partly refused reports **one line per refused column**, naming its product and
+  every label the refusal covers, instead of one line per label: a column is written in one request
+  and refused whole, so twenty lines said one thing twenty times.
 - `after_migrate` creates nothing beyond the DocTypes, the constraints, the roles and the settings
   single. A site upgraded from 0.2.0 has no leftover tables to clean by hand: the archive's tables
   belonged to the app and went when its DocTypes were dropped.
@@ -59,6 +343,26 @@ permanent in-database archive that 0.2.0 added is removed, and that is the point
 
 ### Removed
 
+- **The second write path, and everything that existed for it.** `confirm_import` was still
+  registered and still answering, but nothing had prepared a session for it since the window
+  stopped needing one — so it was a write surface reachable only by a caller who inserted a
+  `Logistics Import Session` row itself (an Editor may, through the REST API), with a payload
+  nothing validated the shape of. The endpoint, `_store_session`, `_load_payload`, the gateway's
+  `create_session`/`read_session`/`read_session_payload`/`lock_session`, and
+  `build_confirmation_plan`/`run_confirmation` are gone, and the endpoint and gateway lists, the
+  `core.authz` tables and the tests that covered them were updated with them. What remains is one
+  write path — `core.validation.plan_registration` behind `add_row_serial`, `add_row_serials` and
+  `set_row_serials` — and the invariant that was about the removed one (I12) is marked retired
+  rather than left claiming an enforcement nothing provides. The `Logistics Import Session` DocType
+  and its rows are untouched, and the daily sweep still expires them.
+- **«اجازهٔ ثبت بیش از تعداد فاکتور» (`allow_over_quantity`), and with it the setting.** The cap
+  it switched off is the rule now: `core.validation` refuses a registration past a row's invoiced
+  quantity for every caller, with nothing to turn it off (I20), and the settings page was
+  regrouped into serial, scanning and parsing sections around what an operator actually changes.
+  The field was a real column on `tabLogistics Settings`, so **`bench migrate` drops it** — one row,
+  a flag nothing reads any more, and no document anywhere else is touched. `next_row_command` is
+  the one field this release *adds* to that table.
+
 - `before_uninstall`, and with it the whole preservation mechanism: `core/archive.py`,
   `setup/archive_store.py`, the three `sp_logistics_*` tables, `snapshot_serials_now`,
   `restore_archived_serials`, the two Manager actions in `core.authz`, `tests/test_archive.py`,
@@ -66,6 +370,42 @@ permanent in-database archive that 0.2.0 added is removed, and that is the point
 
 ### Notes
 
+- **A cancelled invoice may be read and emptied, and may not be added to.** The window always had
+  this rule and the server never did, so it was a property of the client: a registration through an
+  API call, or from a window left open across a cancellation, went through. `core.authz` refuses
+  `docstatus = 2` for the endpoints that write a registration and allows every read and every
+  removal — the registrations a cancelled invoice holds were added when it was live, and somebody
+  has to be able to see and remove them. The state is read from the stored document, never from a
+  request, and re-checked **under the invoice lock**, so an invoice cancelled while the request
+  waited is refused too.
+- **A missing invoice and a forbidden one are the same answer everywhere.** The write endpoints
+  checked the invoice only when the lookup had found one, so a name that does not exist answered
+  `PLAN_INVOICE_CHANGED` (فاکتور یافت نشد) while an invoice in another company answered
+  `AUTH_COMPANY_NOT_ALLOWED` — two answers where `core.authz` promises one, and a caller who can
+  tell them apart has a way to find out which invoice names are real. `INVOICE_ENDPOINTS` names
+  every endpoint that is about one invoice, and all of them check it either way; a static test
+  reads the module and fails if an endpoint starts naming an invoice without being listed.
+- **The archive preflight measures every part before it reads any of them.** Reading the
+  content-type map to decide whether a `.bin` is printer settings put a whole-part decompression
+  ahead of the very bounds meant to catch a bomb. Every part is now measured first — path, name,
+  declared size, compression ratio — and the two extra reads (the content-type map, and eight bytes
+  of a claimed printer-settings part) happen after that, which also means a package that fails any
+  bound is refused without being opened. Both reads take the `ZipInfo` they were handed rather than
+  the part's name: a ZIP may hold two members under one name, and opening by name answers with the
+  same bytes however many times it is asked, so an OLE container hidden behind a name that also
+  holds a benign part used to go unlooked-at. There is a test for each of those, and the second one
+  fails against the code as it was.
+- **A legitimate XLSX with printer settings is no longer refused.** The archive preflight treated
+  any `xl/**.bin` as an embedded OLE object, and Excel writes `xl/printerSettings/printerSettings*`
+  `.bin` parts into a workbook as a matter of course — so a perfectly ordinary file was rejected
+  with «فایل دارای شیء جاسازیشده است». The rule now reads the two things that decide it — the
+  content-type map's own declaration of the part, and the part's own first bytes — and accepts a
+  printer-settings part that is declared as one and is not an OLE container. Nothing else changed:
+  `xl/embeddings/`, `xl/oleobjects/`, `xl/activex/`, every `.emf`/`.wmf`/`.xls`/`.doc`/`.ole` under
+  `xl/`, the ZIP traversal checks, the decompression-bomb bounds and the file-size limits are
+  exactly as they were, and a `.bin` is not whitelisted by its extension. The reader now touches
+  `[Content_Types].xml` and eight bytes of one part it has already decided to accept, and the
+  module says so where it says what it reads.
 - All four provenance columns come back as they were: `creation`, `owner`, `modified` and
   `modified_by`. Frappe overwrites every one of them on an insert — `set_user_and_timestamp`
   rewrites `modified` and `modified_by` unconditionally, and `creation` and `owner` unless one of
@@ -297,6 +637,72 @@ or from a TXT/XLSX file.
 
 ### Fixed
 
+- **Restoring an export can no longer write to a cancelled invoice.** `apply_serial_restore` is the
+  one write path that does not go through `core.validation`, and it was also the one that never
+  asked whether the invoice was cancelled: a file naming an invoice whose `docstatus` is 2 had its
+  registrations created on it, which is the state the app documents it never creates and every other
+  path refuses. The world the planner is given now carries the cancelled invoices (read from the
+  stored document, never from the file) and `core/export.plan` reports such a row as a conflict
+  (`INVOICE_CANCELLED`) and leaves it alone — so a file that mixes a cancelled invoice with live
+  ones restores what it can and names the rest, exactly as it does for any other conflict.
+- **An invoice in another company is refused the way a name that matched nothing is.** The *message*
+  was already the same; the **code** was not, and the code travels to the caller inside it
+  (`AUTH_COMPANY_NOT_ALLOWED` against `AUTH_INVOICE_NOT_FOUND`). Invoice names are sequential and
+  guessable, so the difference was a way to learn which names are real. One sentence, one code,
+  written once in `core.authz`.
+- **The refusal Frappe renders is escaped.** `frappe.msgprint` treats what it is given as HTML, and
+  the sentence it was given quotes the serial the server refused — a label pasted from a file is
+  data, and a label that reads `<img …>` must appear as those characters.
+- **One status read is bounded.** It loaded every registration of the invoice; it now loads at most
+  `core.limits.MAX_INVOICE_ASSIGNMENTS` (5,000) and **refuses** rather than drawing a page that was
+  cut short, because every count in that payload is a count of what was read.
+- **A paste lands in the column it was pasted into.** Clicking the serial input of invoice row 2 and
+  pasting sent every serial to invoice row 1: the paste handler read the field's own row key for its
+  flash message and then handed the text to `intake` with the invoice's **first** row as the starting
+  row, so the field's row was never the target and a list carrying no command had nothing to correct
+  it with. Every other way in already went where it was aimed — a scanned label, a typed label — and
+  the paste was the one that did not. `intake` is now called with the row the paste arrived in, which
+  is what clicking that input says; `*N` and the next-column command still move the cursor from
+  there for everything that follows, so `["N-1", "#2", "N-2"]` pasted into row 3 leaves `N-1` in row
+  3 and sends `N-2` to row 2. A **file** is unchanged and still begins at invoice row 1, because a
+  picker in the footer is not aimed at a column; that is the only input for which the difference
+  shows, and it is now stated where the rule lives.
+- **An optional column that holds serials is green instead of gray.** `column_is_complete` is false
+  for a row whose item is not marked `sp_serial_required`, and rightly so — nothing was required of
+  it — but that was the *only* state the window had for such a row, so twenty registered serials on
+  the operator's optional row drew it exactly as it draws an empty one. The state vocabulary was
+  missing a member rather than the stylesheet missing a rule: `core.eligibility.column_is_filled` is
+  the populated state (one label to the row's quantity, for an optional row only), it is served as
+  `row.is_filled` beside `is_complete`, and the window draws it as a green header with **no tick and
+  no chime**, keeping the «اختیاری» label. A row past its quantity is the excess state as before, so
+  a column somebody has to fix never looks finished, and the window's own verdict includes the labels
+  still unsaved, so a paste into an optional column turns it green at once.
+- **A file being read now says so, and cannot leave the window stuck.** The read had no notice of its
+  own — the toolbar chip is the *write* indicator — and a `frappe.call` that threw before returning a
+  promise skipped the whole chain behind it, leaving the picker and the button disabled for as long
+  as the dialog stayed open. «لطفاً منتظر بمانید؛ فایل در حال پردازش است…» now stands where the
+  file's result will appear while the request is out, the picker and the button are disabled and a
+  second press asks for nothing, and a `finally` puts both back after a success **and** after a
+  failure — with the refusal's own Persian sentence and a line saying the read is over in place of
+  the notice. The call is made inside a `then`, so a call that fails before it returns anything is a
+  rejection like any other rather than a way past the `finally`.
+- **A multi-column paste is read column by column, like the workbook it came from.** The paste path
+  split the whole clipboard with the site's separators and handed the flat token list to the intake,
+  so a copied range of cells was flattened across its rows: the commands in the first line — `*1`,
+  `*2`, `*3` — were all consumed before a single serial arrived, the cursor ended on the last one,
+  and every serial was staged on that row. The same range uploaded from the workbook was routed
+  correctly, which is how one set of rules gave two answers for one input. `intake` now decodes each
+  text first (`smartprocess_logistics.decode_intake_values`): a **table** — two or more lines
+  carrying a tab — yields its nonempty cells **column by column, top to bottom**, in the order
+  `core.spreadsheet.column_major_texts` reads a workbook, and a **list** yields the whole text,
+  which the separators take apart exactly as before. A shape has to span rows to be a shape, so one
+  line with a tab, or a column of cells with newlines only, keeps the sequential reading it had;
+  commands still switch rows as often as the operator wrote them. This is a decode step and not a
+  second parser: it interprets nothing, chooses no row, and drops no nonempty cell, so a cell that
+  belongs to no command is read at the cursor like any other value rather than silently discarded.
+  Verified on the operator's own `01.xlsx` and on the clipboard copy of the same range: the two
+  stage the same 36 serials — one cell of a command-less column, five under `*1`, ten under `*2`,
+  twenty under `*3` — on the same rows, in the same order, with the same validation result.
 - **An Editor could not import from a file at all.** `Logistics Import Session` carried no
   DocPerm rows, so `document.insert` refused the preview with a bare `PermissionError` — an empty
   message in a dialog — for every user who was not an Administrator. The whole path had only ever

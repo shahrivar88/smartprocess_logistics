@@ -5,3 +5,19 @@
 # nothing else. Git for Windows turns on `core.autocrlf` by default; this file
 # overrides that for every clone rather than relying on a local setting.
 * text=auto eol=lf
+
+# A workbook is a ZIP archive, and `text=auto` only declines to touch it because the bytes
+# happen to contain a NUL. Saying so outright is what keeps a future `eol` rule, a filter or a
+# different Git version from rewriting the one file the spreadsheet tests read
+# (`smartprocess_logistics/tests/fixtures/synthetic-workbook.xlsx`) — a rewrite of a ZIP is a
+# workbook openpyxl refuses, and the test that proves the intake's reading order would fail with
+# an error about the fixture rather than about the order.
+*.xlsx binary
+
+# Files that belong to this machine's way of working rather than to the app. `export-ignore`
+# keeps them out of `git archive` — and so out of the tarball or ZIP a release page offers —
+# while leaving them in the working tree and in history, where they are used. A clone still
+# sees them: taking them out of the repository is a history decision, not an attribute.
+CLAUDE.md export-ignore
+.claude/ export-ignore
+docs/test-manifest.md export-ignore

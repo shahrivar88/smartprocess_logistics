@@ -30,3 +30,9 @@ DEFAULT_ITEM_MARKERS = (
 	("هش پس از شمارهٔ ردیف", "{n}#"),
 	("هش پیش از شمارهٔ ردیف", "#{n}"),
 )
+
+# What the scan window's "next column" command starts as. Two asterisks because it is a value a
+# scanner can be programmed with and a person cannot type by accident while scanning serials —
+# and because the serials this app sees are alphanumeric, so nothing real normalizes to it.
+# It is only ever a starting value: written when the field is empty, never over a site's own.
+DEFAULT_NEXT_ROW_COMMAND = "**"

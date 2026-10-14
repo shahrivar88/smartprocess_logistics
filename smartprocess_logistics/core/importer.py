@@ -27,8 +27,6 @@ from smartprocess_logistics.core.quantities import required_units, row_coverage
 from smartprocess_logistics.core.validation import (
 	SEVERITY_ERROR,
 	SEVERITY_WARNING,
-	ExistingAssignment,
-	InvoiceRow,
 	SerialIssue,
 	plan_registration,
 )
@@ -96,7 +94,6 @@ class ImportRequest:
 	delimiters: tuple = ()
 	patterns: tuple = ()
 	policy: NormalizationPolicy = field(default_factory=NormalizationPolicy)
-	allow_over_quantity: bool = False
 	target_row_key: str | None = None
 	row_mapping_confirmed: bool = False
 
@@ -452,7 +449,6 @@ def build_preview(
 		existing=request.existing,
 		delimiters=request.delimiters,
 		policy=request.policy,
-		allow_over_quantity=request.allow_over_quantity,
 	)
 
 	issues = list(source_issues) + list(layout_issues)
@@ -570,6 +566,24 @@ def preview_from_sheet_rows(rows, request, *, report=None, encoding=None, shape=
 		sheets=sheets,
 		encoding=encoding,
 	)
+
+
+def values_from_workbook(data, *, archive_limits=None, sheet_limits=None):
+	"""Every nonempty cell of an `.xlsx` payload, in the order the intake reads it.
+
+	Column by column, top to bottom, as texts. Nothing is interpreted, no row is chosen and no
+	serial is validated: the values go to the window, which runs them through the same intake a
+	paste goes through, and the invoice is written by `add_row_serials` when the operator saves.
+
+	The archive preflight runs here, so a payload that is refused never reaches the reader.
+	"""
+	from smartprocess_logistics.core.archives import inspect_archive
+	from smartprocess_logistics.core.spreadsheet import column_major_texts, read_workbook
+
+	archive = inspect_archive(data, limits=archive_limits)
+	rows, report = read_workbook(data, limits=sheet_limits, archive=archive)
+
+	return column_major_texts(rows), report
 
 
 def preview_from_workbook(data, request, *, archive_limits=None, sheet_limits=None, shape=None):

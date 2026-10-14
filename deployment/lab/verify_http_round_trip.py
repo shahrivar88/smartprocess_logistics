@@ -277,6 +277,64 @@ def main():
 		refusal_of(text),
 	)
 
+	# --- the third restore, through the same dispatcher ------------------------------------
+	#
+	# The mode that was unreachable. Its preview built a plan with no restore marker, and the
+	# records mode refuses a document without one — so it answered `EXPORT_BAD_SHAPE` for every
+	# file, the button in `Logistics Settings` failed at the preview, and the apply behind it could
+	# never be reached. Found in phase 19 by calling the endpoints; the browser harness stubs
+	# `frappe.call` and could not see it.
+	status, text = call(
+		agent,
+		"/api/method/smartprocess_logistics.api.endpoints.preview_restore_audit_records",
+		{"content": content},
+	)
+	records = message_of(text)
+
+	recorder.check(
+		status == 200 and isinstance(records, dict),
+		"preview_restore_audit_records answers",
+		f"HTTP {status}: {text[:160]}",
+	)
+
+	if isinstance(records, dict):
+		print(
+			f"       records preview: in file={records.get('records_in_file')}"
+			f" to_create={records.get('to_create_records')}"
+		)
+		recorder.check(
+			records.get("records_in_file", 0) > 0,
+			"and reports the records the file carries",
+			str(records.get("records_in_file")),
+		)
+
+		status, text = call(
+			agent,
+			"/api/method/smartprocess_logistics.api.endpoints.restore_audit_records",
+			{"content": content, "token": records.get("token")},
+		)
+		placed = message_of(text)
+
+		recorder.check(
+			isinstance(placed, dict),
+			"restore_audit_records answers with the token",
+			f"HTTP {status}: {text[:160]}",
+		)
+
+		if isinstance(placed, dict):
+			print(f"       records apply: {placed['counts']}")
+			recorder.check(
+				placed["counts"]["created"]["serials"] == 0
+				and placed["counts"]["created"]["assignments"] == 0,
+				"and places no serial and no registration, because every row of the file is here",
+				str(placed["counts"]),
+			)
+			recorder.check(
+				placed["counts"]["by_reason"].get("RECORD_EXISTS", 0) > 0,
+				"every record in the file is reported as one this site already has",
+				str(placed["counts"]["by_reason"]),
+			)
+
 	print(f"\n{'PASS' if not recorder.failures else f'FAIL ({recorder.failures} checks)'}")
 
 	return 1 if recorder.failures else 0

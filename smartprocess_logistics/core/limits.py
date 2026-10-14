@@ -29,6 +29,23 @@ KILOBYTE = 1024
 DEFAULT_PAGE_LENGTH = 50
 MAX_PAGE_LENGTH = 500
 
+# How many registrations one status read loads. The window draws one cell per registration and
+# counts what it read, so the read is bounded and an invoice that reaches the bound is **refused**
+# rather than drawn with a count that is really a page size. Five thousand is far above anything
+# this app has measured — the operator's own largest invoice holds 33 — and far below anything
+# that would trouble a worker; an invoice larger than this is a data problem, not a window.
+MAX_INVOICE_ASSIGNMENTS = 5000
+
+
+def status_read_is_capped(count, limit=MAX_INVOICE_ASSIGNMENTS):
+	"""Whether a status read filled its page: the invoice holds at least `limit` registrations.
+
+	A read that comes back with exactly the page size cannot be told from one that was cut short,
+	which is why the caller refuses instead of counting: a shortage report about half an invoice is
+	worse than a sentence saying the invoice is too large for this window.
+	"""
+	return count >= limit
+
 
 def _capped(setting, default):
 	"""The setting, when it is a usable number below the default; the default otherwise."""

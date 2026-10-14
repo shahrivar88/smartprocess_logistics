@@ -51,14 +51,17 @@ NAMES_PAGE_SIZE = 200
 
 
 def _ensure_app_state():
-	"""The four steps that make an installation correct, in a deliberate order.
+	"""The five steps that make an installation correct, in a deliberate order.
 
 	Roles first, so the DocPerms that name them resolve. Constraints second, because they are the
-	invariant the data must satisfy. The normalization version third, because it describes the
-	code rather than this site and must be able to catch up on every migrate. Seeds last, because
-	`seed_settings` writes `installed_on`, and that timestamp is this app's own marker that the
-	installation finished. Writing it last means a failure anywhere above leaves it empty and the
-	next attempt repairs the site instead of finding a settings row that claims to be complete.
+	invariant the data must satisfy. The next-column command third, and before anything else saves
+	the settings row: the migrate that adds that field leaves it empty, and it is a required value
+	whose own rule refuses an empty one — so a settings row without it cannot be saved at all. The
+	normalization version fourth, because it describes the code rather than this site and must be
+	able to catch up on every migrate. Seeds last, because `seed_settings` writes `installed_on`,
+	and that timestamp is this app's own marker that the installation finished. Writing it last
+	means a failure anywhere above leaves it empty and the next attempt repairs the site instead
+	of finding a settings row that claims to be complete.
 
 	`purge_stale_sessions` is deliberately **not** one of them. It is housekeeping, and an install
 	or a migrate must not be able to fail because a sweep lost a race; the daily job in `hooks.py`
@@ -66,6 +69,7 @@ def _ensure_app_state():
 	"""
 	roles.ensure_roles()
 	constraints.ensure_unique_constraints()
+	seeds.sync_next_row_command()
 	seeds.sync_normalization_version()
 	seeds.seed_settings()
 

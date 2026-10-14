@@ -26,11 +26,34 @@ What it refuses, and why each one is worth refusing:
   embedded object is a second document carrying its own parser.
 - **Too many worksheets.** Bounds the number of readers that would be started.
 
+The container is not the only thing read here
+---------------------------------------------
+Two small reads happen besides the central directory, and both exist to keep a *false* refusal
+from being the price of a real one:
+
+* the package's own content-type map (`[Content_Types].xml`), because a `.bin` part is printer
+  settings only if the workbook **says** it is; and
+* the first eight bytes of a `.bin` part that claims to be printer settings, because the suffix
+  was standing in for a fact — "this is an OLE container" — and the fact itself is cheap to read.
+
+Neither reads the sheet data, and both are bounded by the same checks as everything else: every
+part is measured in the first pass, and the two reads happen **after** it, so a part that is too
+big, too compressed, a macro or a traversing path is refused before anything is decompressed.
+The first version of this read the content-type map before the measurements, which put a
+whole-part decompression ahead of the very bound meant to catch it.
+
+Both reads take the `ZipInfo` they were given rather than the part's name. A ZIP may hold two
+members under one name, and opening by name answers with one of them — the last — however many
+times it is asked. Reading each entry by identity means a package that hides an OLE container
+behind a name it also uses for a benign part is refused on one of the two, which is the point of
+looking at all.
+
 `ArchiveReport` is returned only when every check passed, so a caller never has to reason
 about a partially accepted archive.
 """
 
 import io
+import re
 import zipfile
 from dataclasses import dataclass
 
@@ -57,7 +80,22 @@ SHARED_STRINGS_NAMES = ("xl/sharedstrings.xml",)
 MACRO_PARTS = ("vbaproject", "xl/vbadata.xml", "xl/ctrlprops/")
 EXTERNAL_LINK_PARTS = ("xl/externallinks/", "xl/externallink", "externallink")
 EMBEDDED_PARTS = ("xl/embeddings/", "xl/oleobjects/", "xl/activex/")
+# Suffixes that mean "a second document is in here" — except `.bin`, which is only suspicious
+# until the package says what it holds. Excel writes legitimate binary parts of its own, and the
+# one that matters is printer settings, written whenever a sheet is printed:
+# `xl/printerSettings/printerSettings1.bin`, declared in the content-type map and referenced from
+# the sheet's relationships. Refusing it by suffix refused a workbook nobody had done anything to.
 OLE_SUFFIXES = (".bin", ".emf", ".wmf", ".xls", ".doc", ".ole")
+# The magic number of an OLE compound file. This is what "embedded object" actually means, and it
+# is a fact about the bytes rather than about a file name.
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+CONTENT_TYPES_NAME = "[content_types].xml"
+PRINTER_SETTINGS_PREFIX = "xl/printersettings/"
+PRINTER_SETTINGS_BIN_SUFFIX = ".bin"
+PRINTER_SETTINGS_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.printersettings"
+
+OVERRIDE_TAG = re.compile(r"<override\b([^>]*?)/?>", re.IGNORECASE)
+ATTRIBUTE = re.compile(r'([a-zA-Z]+)\s*=\s*"([^"]*)"')
 
 
 @dataclass(frozen=True)
@@ -120,6 +158,79 @@ def _matches(lowered_name, parts):
 	return any(part in lowered_name for part in parts)
 
 
+def _printer_settings_parts(archive, entries):
+	"""What this package declares as printer settings, read from its content-type map.
+
+	Both declarations are honoured, because Excel writes both: a `Default` for the whole `bin`
+	extension — which is what the workbook that prompted this carried — and an `Override` naming
+	one part. A `bin` declared as anything else, or not declared at all, is not printer settings
+	and is refused exactly as before.
+
+	Returns `(declared part names, whether the whole bin extension is printer settings)`. A
+	package whose content-type map cannot be read declares nothing, which fails closed.
+	"""
+	declared = set()
+	whole_extension = False
+
+	for entry in entries:
+		if entry.filename.lower() != CONTENT_TYPES_NAME:
+			continue
+
+		try:
+			with archive.open(entry) as stream:
+				body = stream.read().decode("utf-8", "replace")
+		except (zipfile.BadZipFile, RuntimeError, OSError, NotImplementedError, MemoryError):
+			return declared, whole_extension
+
+		lowered = body.lower()
+
+		if 'extension="bin"' in lowered and PRINTER_SETTINGS_CONTENT_TYPE in lowered:
+			whole_extension = True
+
+		for attributes in OVERRIDE_TAG.findall(body):
+			fields = {key.lower(): value for key, value in ATTRIBUTE.findall(attributes)}
+			content_type = (fields.get("contenttype") or "").lower()
+			part = (fields.get("partname") or "").lstrip("/")
+
+			if part and content_type == PRINTER_SETTINGS_CONTENT_TYPE:
+				declared.add(part.lower())
+
+		break
+
+	return declared, whole_extension
+
+
+def _is_declared_printer_settings(entry, archive, declared, whole_extension):
+	"""Whether a `.bin` part is the printer settings its package says it is.
+
+	Three kinds of evidence, and all three are needed. The part sits where Excel puts printer
+	settings; the package declares it as printer settings; and its bytes are **not** an OLE
+	container — which is the fact the suffix was standing in for, and the one that catches a
+	renamed embedded object. Any of the three failing means the part is refused, so nothing here
+	widens what an archive may carry except for the case that was wrong to refuse.
+
+	`entry` is the member itself rather than its name, so a package that holds two members under
+	one name has both of them looked at: opening by name answers with the same bytes however many
+	times it is asked, and the one it answers with is not always the one being asked about.
+	"""
+	lowered = entry.filename.lower()
+
+	if not lowered.endswith(PRINTER_SETTINGS_BIN_SUFFIX):
+		return False
+
+	if not lowered.startswith(PRINTER_SETTINGS_PREFIX):
+		return False
+
+	if lowered.lstrip("/") not in declared and not whole_extension:
+		return False
+
+	try:
+		with archive.open(entry) as stream:
+			return stream.read(len(OLE_MAGIC)) != OLE_MAGIC
+	except (zipfile.BadZipFile, RuntimeError, OSError, NotImplementedError, MemoryError):
+		return False
+
+
 def inspect_archive(data, limits=None):
 	"""Measure and accept or refuse a ZIP container.
 
@@ -155,6 +266,10 @@ def inspect_archive(data, limits=None):
 	total_compressed = 0
 	shared_strings_bytes = 0
 	worksheets = []
+	# The `xl/**.bin` parts, kept for the second pass: whether one of them is printer settings is
+	# decided by reading the package's content-type map, and that read belongs *after* these
+	# measurements rather than before them.
+	ole_suffixed = []
 
 	for entry in entries:
 		name = entry.filename
@@ -169,10 +284,11 @@ def inspect_archive(data, limits=None):
 		if _matches(lowered, EXTERNAL_LINK_PARTS):
 			raise ArchiveError(CODE_EXTERNAL_LINKS, "فایل به منابع خارجی ارجاع می‌دهد.")
 
-		if _matches(lowered, EMBEDDED_PARTS) or (
-			lowered.startswith("xl/") and lowered.endswith(OLE_SUFFIXES)
-		):
+		if _matches(lowered, EMBEDDED_PARTS):
 			raise ArchiveError(CODE_EMBEDDED_OBJECTS, "فایل دارای شیء جاسازی‌شده است.")
+
+		if lowered.startswith("xl/") and lowered.endswith(OLE_SUFFIXES):
+			ole_suffixed.append(entry)
 
 		if lowered.startswith(WORKSHEET_PREFIX) and lowered.endswith(".xml"):
 			worksheets.append(name)
@@ -208,6 +324,15 @@ def inspect_archive(data, limits=None):
 			CODE_TOO_MANY_SHEETS,
 			f"تعداد شیت‌های فایل بیش از {limits.max_worksheets} است.",
 		)
+
+	# Every part has been measured by now, so the content-type map is read on a package that has
+	# already been bounded: a map that is itself a bomb is refused above, before it is decompressed.
+	if ole_suffixed:
+		declared, whole_extension = _printer_settings_parts(archive, entries)
+
+		for entry in ole_suffixed:
+			if not _is_declared_printer_settings(entry, archive, declared, whole_extension):
+				raise ArchiveError(CODE_EMBEDDED_OBJECTS, "فایل دارای شیء جاسازی‌شده است.")
 
 	return ArchiveReport(
 		entries=len(entries),

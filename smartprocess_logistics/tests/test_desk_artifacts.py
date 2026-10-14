@@ -21,6 +21,10 @@ been broken or could be:
 - **The report's file name is its document name.** `query_report.get_script` looks for
   `<module>/report/<scrub(name)>/<scrub(name)>.js`, so a report whose folder is spelled
   differently loads no filters and silently shows none.
+- **An app-level file is named after its document.** `remove_orphan_entities` finds the
+  `Workspace Sidebar` and `Desktop Icon` this app ships by looking for `<scrub(name)>.json` and
+  deletes the record when the file is missing — so a Latin file name under a Persian document
+  name loses the navigation on the next migrate.
 - **The hooks point at files that exist.** `doctype_js` and `app_include_css` are paths from
   the app package; a typo is a 404 in the browser and a console message nobody reads.
 """
@@ -29,6 +33,7 @@ import json
 import pathlib
 import re
 
+from smartprocess_logistics.core import transfer
 from smartprocess_logistics.tests.base import UnitTestCase
 
 # `APP` is the app package — `hooks.py`, `api/`, `core/`, and the two app-level folder names
@@ -148,6 +153,40 @@ class TestDesktopIcon(UnitTestCase):
 		)
 
 
+class TestTheAppLevelFilesAreNamedAfterTheirDocuments(UnitTestCase):
+	"""The file name is the only thing `migrate` uses to tell a shipped artefact from an orphan.
+
+	`frappe.model.sync.remove_orphan_entities` asks `check_if_record_exists(type="app", ...)`,
+	which builds one path — `<app>/<folder>/<scrub(name)>.json` — and deletes the record when that
+	path is missing. It never searches the folder, so a file whose name disagrees with its own
+	document is imported on install and **deleted on the first migrate**, taking the navigation
+	with it. Both `Workspace Sidebar` and `Desktop Icon` are checked by `name`; `Desktop Icon`
+	exports itself as `scrub(label)`, and `label == name` is asserted above, so one rule covers
+	both. This is not hypothetical: the Persian-named sidebar and icon were shipped as
+	`logistics.json` and were removed by every migrate until this test was written.
+	"""
+
+	def scrub(self, text):
+		# `frappe.scrub`, which is the whole of it: spaces and hyphens become underscores.
+		return text.replace(" ", "_").replace("-", "_").lower()
+
+	def test_every_app_level_file_is_named_after_the_document_it_holds(self):
+		folders = {"workspace_sidebar": SIDEBAR_DIR, "desktop_icon": ICON_DIR}
+
+		seen = 0
+
+		for folder, directory in folders.items():
+			for path in sorted(directory.glob("*.json")):
+				doc = read_json(path)
+				name = doc.get("name") or doc.get("label")
+
+				with self.subTest(folder=folder, path=path.name):
+					self.assertEqual(path.stem, self.scrub(name), f"migrate would delete {name!r}")
+					seen += 1
+
+		self.assertEqual(seen, 3, "the three files this app ships: two sidebars and one icon")
+
+
 class TestWorkspace(UnitTestCase):
 	def workspace(self):
 		paths = sorted(WORKSPACE_DIR.glob("*/*.json"))
@@ -171,7 +210,7 @@ class TestWorkspace(UnitTestCase):
 
 		breaks = [link for link in doc["links"] if link["type"] == "Card Break"]
 
-		for index, card in enumerate(breaks):
+		for card in breaks:
 			following = doc["links"][doc["links"].index(card) + 1 :]
 			links_in_card = []
 
@@ -229,6 +268,10 @@ class TestHooksPointAtRealFiles(UnitTestCase):
 		# asks for, which `/assets/<app>/` maps onto the package's `public` directory.
 		for hook_value, on_disk in (
 			("public/js/sales_invoice_serial_button.js", APP / "public/js/sales_invoice_serial_button.js"),
+			(
+				"public/js/sales_invoice_serial_transfer.js",
+				APP / "public/js/sales_invoice_serial_transfer.js",
+			),
 			("public/js/logistics_settings_transfer.js", APP / "public/js/logistics_settings_transfer.js"),
 			("/assets/smartprocess_logistics/css/logistics.css", APP / "public/css/logistics.css"),
 		):
@@ -236,7 +279,212 @@ class TestHooksPointAtRealFiles(UnitTestCase):
 				self.assertIn(hook_value, hooks)
 				self.assertTrue(on_disk.exists(), f"{on_disk} does not exist")
 
-	def test_the_item_customization_names_the_flag_the_report_filters_on(self):
+
+class TestTheTransferWindow(UnitTestCase):
+	"""The second toolbar button: a review of two documents, in the source's own order.
+
+	The window draws what `core.transfer.preview_of` returned and imposes no order of its own. It
+	was written the other way first — four separately-grouped lists from the server, regrouped in
+	the browser — and the table came out grouped by outcome, which is the one order an operator
+	cannot hold against the invoice they cancelled. `deployment/lab/verify_transfer_logic.js`
+	drives the drawing; what is pinned here is the shape of the source: where its data comes from,
+	where the vocabulary lives, and that it does not branch on a reason code.
+	"""
+
+	def source(self):
+		return (APP / "public" / "js" / "sales_invoice_serial_transfer.js").read_text(encoding="utf-8")
+
+	def test_both_sales_invoice_scripts_are_registered_as_a_list(self):
+		"""Frappe accepts a list here, and it reads each path: `get_code_files_via_hooks` wraps a
+		single path in one. Registering the second script as a second dict key would replace the
+		first, because a dict has no second key of the same name."""
+		hooks = (APP / "hooks.py").read_text(encoding="utf-8")
+
+		self.assertIn('"Sales Invoice": [', hooks)
+
+		for name in ("sales_invoice_serial_button.js", "sales_invoice_serial_transfer.js"):
+			with self.subTest(script=name):
+				self.assertIn(name, hooks)
+
+	def test_it_adds_one_button_and_no_group(self):
+		"""One press, one window, and no menu in between — the same rule the serial button follows."""
+		source = self.source()
+		match = re.search(r"add_custom_button\((.*?)\);", source, re.DOTALL)
+
+		self.assertIsNotNone(match, "the button is no longer added at all")
+		self.assertEqual(source.count("add_custom_button("), 1)
+		self.assertEqual(match.group(1).count('__("'), 1, f"a label and no group: {match.group(1)!r}")
+		self.assertIn("open_transfer_dialog(frm)", match.group(1))
+
+	def test_it_draws_the_servers_list_and_regroups_nothing(self):
+		source = self.source()
+
+		self.assertIn("preview.serials", source)
+
+		for key in ("preview.moved", "preview.warnings", "preview.blocked", "preview.unselected"):
+			with self.subTest(key=key):
+				self.assertNotIn(key, source)
+
+	def test_it_branches_on_the_servers_flag_and_not_on_a_reason_code(self):
+		"""`answerable` is the server saying an answer would change this row's outcome. The window
+		reading the code instead would be a second place that knows which refusals are questions."""
+		source = self.source()
+
+		self.assertIn("row.answerable", source)
+		self.assertNotIn('=== "ACKNOWLEDGEMENT_MISSING"', source)
+
+	def test_every_reason_the_record_can_hold_has_a_label_in_the_window(self):
+		"""The one place the two languages meet, and the only way to see them drift apart."""
+		source = self.source()
+
+		for reason in transfer.RECORDABLE_REASONS:
+			with self.subTest(reason=reason):
+				self.assertIn(f"{reason}:", source)
+
+	def test_the_window_names_no_serial_identity(self):
+		"""The identity is derived on the server; a window that named one would be deciding it."""
+		self.assertNotIn("normalized", self.source())
+
+	def test_it_reads_the_room_the_server_computed(self):
+		"""`room` is sent so the window does not repeat the capacity rule to fill a select."""
+		source = self.source()
+
+		self.assertIn("row.room", source)
+		self.assertNotIn("capacity -", source)
+
+	def test_the_settings_script_is_one_of_the_files_the_desk_loads(self):
+		hooks = (APP / "hooks.py").read_text(encoding="utf-8")
+
+		self.assertIn("public/js/logistics_settings_transfer.js", hooks)
+
+	def test_every_script_the_app_ships_is_named_in_a_hook(self):
+		"""A script nothing loads is a script that was written and never wired."""
+		hooks = (APP / "hooks.py").read_text(encoding="utf-8")
+
+		for path in sorted((APP / "public" / "js").glob("*.js")):
+			with self.subTest(script=path.name):
+				self.assertIn(path.name, hooks)
+
+
+class TestTheTwoRestores(UnitTestCase):
+	"""One flow, two acts, and the differences between them written down in one place.
+
+	The historical restore writes to cancelled invoices — the one thing every other write in this
+	app refuses — so it is a button of its own and not a mode the ordinary one falls into. What is
+	pinned here is that the *only* difference between them is the table at the top of the file:
+	two endpoint names, a label, and a warning. A second copy of the flow would be a second place
+	for the warnings to drift.
+
+	The behavioural half — that the archivist sees three buttons and the Manager two, that the
+	historical preview carries the warning, and that confirming calls the historical endpoint with
+	the preview's own token — is driven in a browser by `deployment/lab/preview_settings_restore.html`,
+	because a source text can say which endpoint a call names and only a runtime can say that it
+	is the one that ran.
+	"""
+
+	def source(self):
+		return (APP / "public" / "js" / "logistics_settings_transfer.js").read_text(encoding="utf-8")
+
+	def test_there_is_one_flow_and_a_table_of_two_modes(self):
+		source = self.source()
+
+		self.assertEqual(source.count("const RESTORES = {"), 1)
+		self.assertEqual(source.count("preview_endpoint:"), 3)
+		self.assertEqual(source.count("apply_endpoint:"), 3)
+
+	def test_the_modes_name_the_four_endpoints(self):
+		source = self.source()
+
+		for endpoint in (
+			"preview_serial_restore",
+			"apply_serial_restore",
+			"preview_cancelled_serial_history",
+			"restore_cancelled_serial_history",
+			"preview_restore_audit_records",
+			"restore_audit_records",
+		):
+			with self.subTest(endpoint=endpoint):
+				self.assertIn(endpoint, source)
+
+	def test_the_records_mode_carries_its_own_warning(self):
+		"""The other act that needs one: it makes documents that record acts performed elsewhere."""
+		source = self.source()
+		start = source.index("records: {")
+		mode = source[start : source.index("history: {", start)]
+
+		warning = mode[mode.index("warning: __(") : mode.index("),", mode.index("warning: __("))]
+
+		self.assertIn("هشدار", warning)
+		self.assertIn("بازآوری‌شده", warning)
+
+	def test_every_mode_that_writes_to_cancelled_invoices_is_separately_labelled(self):
+		source = self.source()
+
+		self.assertIn("بازآوری تاریخچهٔ فاکتورهای لغو‌شده", source)
+		self.assertIn("بازآوری سابقه‌های انتقال", source)
+		self.assertNotEqual(source.index("history: {"), source.index("records: {"), "two modes, two entries")
+
+	def test_the_historical_warning_says_cancelled(self):
+		"""That mode's own warning text, and not the first one in the file.
+
+		Two assertions narrowed this test twice. It began over the whole mode's slice, which
+		contains the button's label and the comments around it — both naming cancelled invoices —
+		so a warning shortened to "this returns registrations" passed. Then it read the first
+		`warning: __(` in the file, which after the third mode was added was no longer this one.
+		"""
+		source = self.source()
+		start = source.index("history: {")
+		mode = source[start : source.index("function is_manager")]
+		warning = mode[mode.index("warning: __(") : mode.index("),", mode.index("warning: __("))]
+
+		self.assertIn("هشدار", warning)
+		self.assertIn("لغو‌شده", warning)
+
+	def test_the_ordinary_mode_has_no_warning_of_its_own(self):
+		source = self.source()
+		live = source[source.index("live: {") : source.index("history: {")]
+
+		self.assertIn('warning: ""', live)
+
+	def test_only_the_archivist_sees_the_historical_button(self):
+		source = self.source()
+		hook = source[source.index('frappe.ui.form.on("Logistics Settings"') : source.index("const RESTORES")]
+
+		self.assertIn("is_archivist()", hook)
+		self.assertIn("Logistics Serial Archivist", source)
+		self.assertLess(
+			hook.index("is_archivist()"),
+			hook.index("بازآوری تاریخچهٔ فاکتورهای لغو‌شده"),
+			"the button is drawn inside the role check, not beside it",
+		)
+
+	def test_it_decides_no_policy_and_writes_through_the_endpoints(self):
+		source = self.source()
+
+		self.assertNotIn("CANCELLED_ONLY", source)
+		self.assertNotIn("CANCELLED_REFUSED", source)
+		self.assertNotIn("XMLHttpRequest", source)
+
+	def test_confirming_always_sends_the_token(self):
+		"""The token is what ties the write to the file the operator actually saw."""
+		source = self.source()
+		apply_body = source[source.index("function apply(token, file, restore)") :]
+
+		self.assertIn("args: { content: file.content, token: token }", apply_body)
+		self.assertIn("if (!token)", apply_body)
+
+	def test_the_result_is_reported_under_the_act_that_was_performed(self):
+		source = self.source()
+		apply_body = source[source.index("function apply(token, file, restore)") :]
+
+		self.assertIn("title: restore.title", apply_body)
+
+	def test_it_says_the_transfer_records_are_not_restored(self):
+		"""A file from a version 2 export carries them, and neither restore places one."""
+		source = self.source()
+
+		self.assertIn("records_in_file", source)
+
 		path = MODULE / "custom" / "item.json"
 		doc = read_json(path)
 		fields = {field["fieldname"]: field for field in doc["custom_fields"]}
@@ -265,6 +513,72 @@ def _translated_strings_in_source(path):
 	for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
 		for match in re.finditer(r'(?<![A-Za-z0-9_])(?:__|_lt|_x|_n|_)\(\s*"([^"]{3,})"', line):
 			yield number, match.group(1)
+
+
+class TestTheSerialToolbar(UnitTestCase):
+	"""The one serial button on a Sales Invoice: one press, one window, and nothing behind a menu.
+
+	The toolbar used to carry a «سریال‌ها» dropdown holding «ثبت سریال» beside «جزئیات سریال‌ها»,
+	which made the operator open a menu to reach the window they always want. The rule now is one
+	plain button whose own label is what they press, so what this pins is the shape of the call
+	that draws it: a single `add_custom_button`, two arguments rather than three, the window's own
+	opening function as the action, and no second entry to reappear.
+
+	The behavioural half of the same rule — that the button opens the real dialog, and that a
+	cancelled invoice gets none — is driven in a browser by `deployment/lab/preview_scan_header.html`,
+	because a source text can say what a call looks like and only a runtime can say what it does.
+	"""
+
+	def source(self):
+		return (APP / "public" / "js" / "sales_invoice_serial_button.js").read_text(encoding="utf-8")
+
+	def test_one_button_is_added_and_it_is_the_window_itself(self):
+		source = self.source()
+
+		self.assertEqual(source.count("add_custom_button("), 1)
+		self.assertIn('add_custom_button(__("سریال‌ها"),', source)
+		self.assertIn("smartprocess_logistics.open_serial_dialog(frm)", source)
+
+	def test_the_button_is_not_a_group(self):
+		"""A third argument makes a dropdown; the operator's one press must not need a second.
+
+		Both arguments are here and there is no third: one translated label for the button and one
+		action for it. A group would be a second translated string in the same call, which is what
+		the count below is about.
+		"""
+		match = re.search(r"add_custom_button\((.*?)\);", self.source(), re.DOTALL)
+
+		self.assertIsNotNone(match, "the button is no longer added at all")
+
+		call = match.group(1)
+
+		self.assertEqual(call.count('__("'), 1, f"the call carries a label and no group: {call!r}")
+		self.assertEqual(call.count("=>"), 1, "and exactly one action")
+
+	def test_the_details_entry_is_gone_and_its_window_is_not(self):
+		"""The label is gone from the app; the window it opened is still here, unreachable."""
+		source = self.source()
+
+		self.assertNotIn('__("جزئیات سریال‌ها")', source)
+		self.assertEqual(source.count("open_details_dialog = function"), 1)
+
+	def test_the_window_is_opened_by_the_one_function_that_defines_it(self):
+		"""No second implementation: the button calls the function the dialog has always had."""
+		source = self.source()
+
+		self.assertEqual(source.count("open_serial_dialog = function"), 1)
+
+	def test_the_button_is_still_gated_on_the_editor_role(self):
+		source = self.source()
+		hook = source.split('frappe.ui.form.on("Sales Invoice"', 1)[1].split("\n});", 1)[0]
+
+		self.assertIn("docstatus === 2", hook)
+		self.assertIn("smartprocess_logistics.allowed(smartprocess_logistics.ROLE.editor)", hook)
+		self.assertLess(
+			hook.index("ROLE.editor"),
+			hook.index("add_custom_button("),
+			"the button is added inside the role check, not beside it",
+		)
 
 
 class TestEverythingOnScreenIsPersian(UnitTestCase):

@@ -1,7 +1,5 @@
 """The registration plan and the configuration checks, at integration level."""
 
-from smartprocess_logistics.tests.base import UnitTestCase
-
 from smartprocess_logistics.core.defaults import DEFAULT_DELIMITERS, DEFAULT_ITEM_MARKERS
 from smartprocess_logistics.core.delimiters import DelimiterError
 from smartprocess_logistics.core.normalization import CODE_EMPTY, CODE_HAS_CONTROL, CODE_TOO_LONG
@@ -18,6 +16,7 @@ from smartprocess_logistics.core.validation import (
 	CODE_DUPLICATE_IN_ROW,
 	CODE_DUPLICATE_ROW_KEY,
 	CODE_EXCESS_QUANTITY,
+	CODE_ROW_NOT_ELIGIBLE,
 	CODE_TOO_MANY_ROWS,
 	CODE_TOO_MANY_SUBMISSIONS,
 	CODE_UNKNOWN_ROW,
@@ -31,10 +30,11 @@ from smartprocess_logistics.core.validation import (
 	check_configuration,
 	plan_registration,
 )
+from smartprocess_logistics.tests.base import UnitTestCase
 
 DELIMITERS = (",", "\\r\\n")
-ROW_1 = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=3)
-ROW_2 = InvoiceRow(row_key="row-2", item_code="ITEM-2", invoiced_qty=1)
+ROW_1 = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=3, serial_required=True)
+ROW_2 = InvoiceRow(row_key="row-2", item_code="ITEM-2", invoiced_qty=1, serial_required=True)
 
 
 def plan(rows, submissions, existing=(), delimiters=DELIMITERS, **kwargs):
@@ -110,7 +110,7 @@ class TestHappyPaths(UnitTestCase):
 		self.assertTrue(second.is_valid)
 
 	def test_a_return_row_is_covered_by_its_absolute_quantity(self):
-		return_row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=-2)
+		return_row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=-2, serial_required=True)
 
 		result = plan([return_row], [("row-1", "A1"), ("row-1", "A2")])
 
@@ -305,9 +305,57 @@ class TestPerSerialFailures(UnitTestCase):
 		self.assertEqual(len(result.accepted), 0)
 
 
+class TestIneligibleRows(UnitTestCase):
+	"""A row whose item is not marked for serials is a row this app does not register on.
+
+	The window does not draw such a row, and this is the half that makes that a rule rather than a
+	convenience: a request naming one — an old client, a script, a window that was not reloaded —
+	is answered with a sentence instead of being written. What it must *not* do is refuse the
+	registrations the row already holds: a removal does not come through here, and hiding a row is
+	not a way of losing what is on it.
+	"""
+
+	INELIGIBLE = InvoiceRow(row_key="row-3", item_code="ITEM-3", invoiced_qty=2, serial_required=False)
+
+	def test_a_registration_on_an_unmarked_row_is_refused(self):
+		result = plan([self.INELIGIBLE], [("row-3", "A1")])
+
+		self.assertFalse(result.is_valid)
+		self.assertEqual(result.issue_codes(), (CODE_ROW_NOT_ELIGIBLE,))
+		self.assertEqual(result.issues[0].serials, ("A1",))
+		self.assertEqual(len(result.accepted), 0)
+
+	def test_the_refusal_names_the_row_that_was_asked_for(self):
+		"""Never another row's item: the operator named a row and is told about that row."""
+		result = plan([ROW_1, self.INELIGIBLE], [("row-3", "A1")])
+
+		self.assertEqual(result.issues[0].row_key, "row-3")
+		self.assertEqual(result.issue_codes(), (CODE_ROW_NOT_ELIGIBLE,))
+
+	def test_nothing_lands_on_an_eligible_row_beside_it(self):
+		"""The serials after a refused row are refused with it, not moved to a row nobody named."""
+		result = plan([ROW_1, self.INELIGIBLE], [("row-3", "A1"), ("row-3", "A2")])
+
+		self.assertEqual(result.issue_codes(), (CODE_ROW_NOT_ELIGIBLE, CODE_ROW_NOT_ELIGIBLE))
+		self.assertEqual(len(result.accepted), 0)
+
+	def test_the_other_rows_of_the_same_request_are_untouched(self):
+		result = plan([ROW_1, self.INELIGIBLE], [("row-1", "A1"), ("row-3", "A2")])
+
+		self.assertEqual(result.issue_codes(), (CODE_ROW_NOT_ELIGIBLE,))
+		self.assertEqual([entry.serial.original for entry in result.accepted], ["A1"])
+
+	def test_emptying_an_unmarked_row_is_not_a_registration(self):
+		"""`set_row_serials` with nothing to add removes that row's set: a maintenance path."""
+		result = plan([self.INELIGIBLE], [], replaced_rows=("row-3",))
+
+		self.assertTrue(result.is_valid)
+		self.assertEqual(result.issue_codes(), ())
+
+
 class TestExcessQuantity(UnitTestCase):
 	def test_more_serials_than_the_quantity_is_refused(self):
-		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2)
+		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2, serial_required=True)
 
 		result = plan([row], [("row-1", "A1"), ("row-1", "A2"), ("row-1", "A3")])
 
@@ -316,26 +364,43 @@ class TestExcessQuantity(UnitTestCase):
 		self.assertEqual(result.issues[0].serials, ("A3",))
 
 	def test_the_excess_serials_are_the_last_ones_submitted(self):
-		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=1)
+		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=1, serial_required=True)
 
 		result = plan([row], [("row-1", "A1"), ("row-1", "A2"), ("row-1", "A3")])
 
 		self.assertEqual(result.issues[0].serials, ("A2", "A3"))
 
-	def test_excess_can_be_allowed(self):
-		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2)
+	def test_excess_is_never_allowed(self):
+		"""The cap is the rule, not a preference: there is no argument that lifts it.
 
-		result = plan(
-			[row],
-			[("row-1", "A1"), ("row-1", "A2"), ("row-1", "A3")],
-			allow_over_quantity=True,
-		)
+		`allow_over_quantity` used to be one, and a site could set it. The confirmed business rule
+		is that a row may never hold more serials than its invoiced quantity, so the switch is gone
+		— and with it the possibility of a caller passing it. What still reports an overfull row is
+		the coverage, for data that got there before the rule or from outside the app.
+		"""
+		with self.assertRaises(TypeError):
+			# A caller that still tries to lift the cap fails loudly rather than being obeyed.
+			plan(
+				[InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2, serial_required=True)],
+				[("row-1", "A1"), ("row-1", "A2"), ("row-1", "A3")],
+				allow_over_quantity=True,
+			)
 
-		self.assertTrue(result.is_valid)
-		self.assertEqual(result.coverages[0].excess, 1)
+	def test_the_cap_is_the_invoiced_quantity_for_every_row(self):
+		"""Exactly the quantity is accepted; the serial after it is not."""
+		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2, serial_required=True)
+
+		exact = plan([row], [("row-1", "A1"), ("row-1", "A2")])
+		over = plan([row], [("row-1", "A1"), ("row-1", "A2"), ("row-1", "A3")])
+
+		self.assertTrue(exact.is_valid)
+		self.assertEqual(exact.coverages[0].excess, 0)
+		self.assertFalse(over.is_valid)
+		self.assertEqual(over.issue_codes(), (CODE_EXCESS_QUANTITY,))
+		self.assertEqual(over.issues[0].serials, ("A3",))
 
 	def test_a_row_already_full_reports_every_new_serial_as_excess(self):
-		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2)
+		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2, serial_required=True)
 		existing = (
 			ExistingAssignment(row_key="row-1", normalized_serial="z1"),
 			ExistingAssignment(row_key="row-1", normalized_serial="z2"),
@@ -347,7 +412,7 @@ class TestExcessQuantity(UnitTestCase):
 		self.assertEqual(result.issues[0].serials, ("A1",))
 
 	def test_filling_a_row_exactly_is_not_excess(self):
-		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2)
+		row = InvoiceRow(row_key="row-1", item_code="ITEM-1", invoiced_qty=2, serial_required=True)
 		existing = (ExistingAssignment(row_key="row-1", normalized_serial="z1"),)
 
 		result = plan([row], [("row-1", "A1")], existing=existing)
@@ -355,7 +420,7 @@ class TestExcessQuantity(UnitTestCase):
 		self.assertTrue(result.is_valid)
 
 	def test_excess_on_one_row_does_not_affect_another(self):
-		rows = [ROW_2, InvoiceRow(row_key="row-3", item_code="ITEM-3", invoiced_qty=1)]
+		rows = [ROW_2, InvoiceRow(row_key="row-3", item_code="ITEM-3", invoiced_qty=1, serial_required=True)]
 
 		result = plan(rows, [("row-2", "B1"), ("row-3", "C1"), ("row-3", "C2")])
 
@@ -371,7 +436,7 @@ class TestStructuralLimits(UnitTestCase):
 
 	def test_too_many_rows_are_refused(self):
 		rows = [
-			InvoiceRow(row_key=f"row-{index}", item_code="ITEM-1", invoiced_qty=1)
+			InvoiceRow(row_key=f"row-{index}", item_code="ITEM-1", invoiced_qty=1, serial_required=True)
 			for index in range(MAX_ROWS + 1)
 		]
 

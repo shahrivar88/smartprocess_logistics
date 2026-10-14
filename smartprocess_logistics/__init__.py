@@ -6,4 +6,4 @@ deliberately independent of ERPNext's own stock serial numbers: it does not enab
 records, and it never posts stock or accounting entries.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
