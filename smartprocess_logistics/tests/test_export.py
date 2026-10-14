@@ -27,9 +27,7 @@ def doctype_fields(foldername):
 	document = json.loads(path.read_text(encoding="utf-8"))
 
 	return tuple(
-		field["fieldname"]
-		for field in document["fields"]
-		if field.get("fieldtype") not in SKIPPED_FIELDTYPES
+		field["fieldname"] for field in document["fields"] if field.get("fieldtype") not in SKIPPED_FIELDTYPES
 	)
 
 
@@ -271,7 +269,10 @@ class WorldNamesTest(UnitTestCase):
 		self.assertEqual(len(names["item_codes"]), len(set(names["item_codes"])))
 
 	def test_an_empty_document_names_nothing(self):
-		self.assertEqual(export.world_names(export.build([], [])), {"item_codes": (), "company_names": (), "invoice_names": ()})
+		self.assertEqual(
+			export.world_names(export.build([], [])),
+			{"item_codes": (), "company_names": (), "invoice_names": ()},
+		)
 
 	def test_the_endpoints_ask_about_the_documents_names(self):
 		"""The bug this test exists for: the world was built from the site's own empty tables."""
@@ -496,9 +497,7 @@ class PlanTest(UnitTestCase):
 		self.assertEqual(summary["by_reason"][export.REASON_INVOICE_MISSING], 1)
 
 	def test_the_sample_never_exceeds_its_limit(self):
-		conflicts = tuple(
-			export.Conflict(f"ROW-{index}", export.REASON_ITEM_MISSING) for index in range(50)
-		)
+		conflicts = tuple(export.Conflict(f"ROW-{index}", export.REASON_ITEM_MISSING) for index in range(50))
 
 		self.assertEqual(len(export.sample(conflicts, limit=10)), 10)
 		self.assertEqual(len(export.sample(conflicts)), export.PREVIEW_SAMPLE)

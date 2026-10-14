@@ -30,9 +30,7 @@ def app_modules():
 	root = schema_checks.APP_ROOT / "smartprocess_logistics"
 
 	return sorted(
-		path
-		for path in root.rglob("*.py")
-		if "tests" not in path.parts and "__pycache__" not in path.parts
+		path for path in root.rglob("*.py") if "tests" not in path.parts and "__pycache__" not in path.parts
 	)
 
 
@@ -217,11 +215,7 @@ def _endpoint_functions(tree):
 		for decorator in node.decorator_list:
 			target = decorator.func if isinstance(decorator, ast.Call) else decorator
 
-			if (
-				isinstance(target, ast.Attribute)
-				and target.attr == "whitelist"
-				and _is_frappe(target.value)
-			):
+			if isinstance(target, ast.Attribute) and target.attr == "whitelist" and _is_frappe(target.value):
 				found[node.name] = node
 
 	return found
@@ -315,11 +309,7 @@ class TestEveryEndpointAuthorizes(UnitTestCase):
 		self.assertGreater(min(authorized), min(writes))
 
 	def test_the_check_fires_on_an_endpoint_that_never_asks(self):
-		tree = ast.parse(
-			"@frappe.whitelist()\n"
-			"def do_thing(x):\n"
-			"    return gateway.read_rows(x)\n"
-		)
+		tree = ast.parse("@frappe.whitelist()\ndef do_thing(x):\n    return gateway.read_rows(x)\n")
 		node = _endpoint_functions(tree)["do_thing"]
 
 		self.assertEqual(_call_lines(node, "authz", AUTHZ_METHODS), [])

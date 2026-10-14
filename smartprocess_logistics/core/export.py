@@ -89,7 +89,10 @@ ASSIGNMENT_IDENTITY = ("sales_invoice", "normalized_serial")
 # carries, and the tests below pin that decision.
 TIMESTAMP_FIELDS = ("creation", "owner", "modified", "modified_by")
 
-SECTIONS = {"serials": (SERIAL_FIELDS, SERIAL_IDENTITY), "assignments": (ASSIGNMENT_FIELDS, ASSIGNMENT_IDENTITY)}
+SECTIONS = {
+	"serials": (SERIAL_FIELDS, SERIAL_IDENTITY),
+	"assignments": (ASSIGNMENT_FIELDS, ASSIGNMENT_IDENTITY),
+}
 
 # How many conflicting rows a preview names. A preview is a summary an operator reads before
 # deciding; the whole list belongs in the report of the import that follows.
@@ -142,11 +145,7 @@ def row_timestamps(row):
 	answer means the insert's own values stand, which is the honest outcome for a row that never
 	said when it was created.
 	"""
-	return {
-		field: row.get(field)
-		for field in TIMESTAMP_FIELDS
-		if row.get(field) not in (None, "")
-	}
+	return {field: row.get(field) for field in TIMESTAMP_FIELDS if row.get(field) not in (None, "")}
 
 
 def misplaced_choices(choices, values):
@@ -244,9 +243,7 @@ def sample(conflicts, limit=PREVIEW_SAMPLE):
 
 def canonical(document):
 	"""The text a digest is computed over: keys sorted, no incidental whitespace."""
-	return json.dumps(
-		document, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
-	)
+	return json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def document_digest(document):
@@ -449,9 +446,7 @@ def world_names(document):
 				| {row.get("item_code") for row in assignments if row.get("item_code")}
 			)
 		),
-		"company_names": tuple(
-			sorted({row.get("company") for row in assignments if row.get("company")})
-		),
+		"company_names": tuple(sorted({row.get("company") for row in assignments if row.get("company")})),
 		"invoice_names": tuple(
 			sorted({row.get("sales_invoice") for row in assignments if row.get("sales_invoice")})
 		),
@@ -510,9 +505,7 @@ def plan(document, world):
 			continue
 
 		if row.get("item_code") not in world.items:
-			conflicts.append(
-				Conflict(row.get("name"), REASON_ITEM_MISSING, str(row.get("item_code")))
-			)
+			conflicts.append(Conflict(row.get("name"), REASON_ITEM_MISSING, str(row.get("item_code"))))
 			continue
 
 		create_serials.append(row)
@@ -530,9 +523,7 @@ def plan(document, world):
 			# The invoice already carries this serial. That is the state the import is trying to
 			# reach, so it is skipped — unless the row that carries it is a *different* serial
 			# row, which is a link this import must not silently bless.
-			if existing == row.get("logistics_serial") or (
-				resolved is not None and existing == resolved
-			):
+			if existing == row.get("logistics_serial") or (resolved is not None and existing == resolved):
 				skip_assignments.append(row)
 			else:
 				conflicts.append(
@@ -585,18 +576,12 @@ def _assignment_conflict(row, world, resolved, arriving):
 	invoice_company = world.invoices.get(invoice)
 
 	if invoice_company and row.get("company") and invoice_company != row.get("company"):
-		return Conflict(
-			row.get("name"), REASON_COMPANY_MISMATCH, f"{row.get('company')} ≠ {invoice_company}"
-		)
+		return Conflict(row.get("name"), REASON_COMPANY_MISMATCH, f"{row.get('company')} ≠ {invoice_company}")
 
 	if (invoice, row.get("sales_invoice_item")) not in world.invoice_rows:
-		return Conflict(
-			row.get("name"), REASON_INVOICE_ROW_MISSING, str(row.get("sales_invoice_item"))
-		)
+		return Conflict(row.get("name"), REASON_INVOICE_ROW_MISSING, str(row.get("sales_invoice_item")))
 
 	if resolved is None and identity not in arriving:
-		return Conflict(
-			row.get("name"), REASON_SERIAL_UNRESOLVED, f"{identity[0]} / {identity[1]}"
-		)
+		return Conflict(row.get("name"), REASON_SERIAL_UNRESOLVED, f"{identity[0]} / {identity[1]}")
 
 	return None

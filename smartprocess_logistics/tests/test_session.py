@@ -87,7 +87,12 @@ class TestStateMachine(UnitTestCase):
 					self.assertEqual(check_transition(source, target), target)
 
 	def test_an_undeclared_transition_is_refused(self):
-		for source, target in ((APPLIED, CLAIMED), (EXPIRED, CLAIMED), (PREPARED, APPLIED), (CLAIMED, CLAIMED)):
+		for source, target in (
+			(APPLIED, CLAIMED),
+			(EXPIRED, CLAIMED),
+			(PREPARED, APPLIED),
+			(CLAIMED, CLAIMED),
+		):
 			with self.subTest(source=source, target=target):
 				with self.assertRaises(SessionError) as caught:
 					check_transition(source, target)

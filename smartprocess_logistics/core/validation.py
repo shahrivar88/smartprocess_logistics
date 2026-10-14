@@ -336,9 +336,7 @@ def _excess_issues(rows_by_key, existing_counts, accepted_counts, accepted):
 		issues.append(
 			SerialIssue(
 				code=CODE_EXCESS_QUANTITY,
-				message=(
-					f"تعداد سریال بیش از تعداد فاکتور است؛ {len(overflow)} سریال اضافه است."
-				),
+				message=(f"تعداد سریال بیش از تعداد فاکتور است؛ {len(overflow)} سریال اضافه است."),
 				row_key=row_key,
 				serials=tuple(overflow),
 			)
@@ -352,9 +350,7 @@ def _coverages(rows_by_key, existing_counts, accepted_counts):
 
 	for row_key, row in rows_by_key.items():
 		registered = existing_counts.get(row_key, 0) + accepted_counts.get(row_key, 0)
-		coverages.append(
-			quantities.row_coverage(row_key, row.item_code, row.invoiced_qty, registered)
-		)
+		coverages.append(quantities.row_coverage(row_key, row.item_code, row.invoiced_qty, registered))
 
 	return tuple(coverages)
 
@@ -387,10 +383,7 @@ def check_configuration(*, delimiters=(), patterns=()):
 		issues.append(
 			SerialIssue(
 				code=CODE_CONFIG_DELIMITER_OVERLAP,
-				message=(
-					f"جداکنندهٔ {shorter!r} داخل {longer!r} قرار دارد؛"
-					" بلندترین جداکننده برنده می‌شود."
-				),
+				message=(f"جداکنندهٔ {shorter!r} داخل {longer!r} قرار دارد؛ بلندترین جداکننده برنده می‌شود."),
 				severity=SEVERITY_WARNING,
 			)
 		)
@@ -403,9 +396,7 @@ def check_configuration(*, delimiters=(), patterns=()):
 		except marker_rules.MarkerPatternError as error:
 			issues.append(SerialIssue(code=CODE_CONFIG_MARKER, message=error.message))
 
-	for first, second in marker_rules.find_ambiguous_patterns(
-		pattern.pattern for pattern in parsed_patterns
-	):
+	for first, second in marker_rules.find_ambiguous_patterns(pattern.pattern for pattern in parsed_patterns):
 		issues.append(
 			SerialIssue(
 				code=CODE_CONFIG_MARKER_AMBIGUOUS,

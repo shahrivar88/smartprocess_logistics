@@ -272,7 +272,11 @@ def phase_export(_arguments):
 
 	counts = live_counts()
 
-	check(document["counts"]["serials"] == counts["serials"], "the export holds every serial", document["counts"])
+	check(
+		document["counts"]["serials"] == counts["serials"],
+		"the export holds every serial",
+		document["counts"],
+	)
 	check(
 		document["counts"]["assignments"] == counts["assignments"],
 		"the export holds every assignment",
@@ -292,7 +296,12 @@ def phase_export(_arguments):
 	# against the state *before* the removal rather than against itself.
 	evidence(
 		"export",
-		{"path": path, "counts": counts, "document_counts": document["counts"], "relationships": relationships()},
+		{
+			"path": path,
+			"counts": counts,
+			"document_counts": document["counts"],
+			"relationships": relationships(),
+		},
 	)
 
 	frappe.db.commit()
@@ -373,7 +382,11 @@ def phase_after_reinstall(_arguments):
 	first = module.apply_serial_restore(text, preview["token"])
 	second = module.apply_serial_restore(text, preview["token"])
 
-	check(first["counts"]["created"]["serials"] == preview["to_create"]["serials"], "every offered serial was created", first["counts"])
+	check(
+		first["counts"]["created"]["serials"] == preview["to_create"]["serials"],
+		"every offered serial was created",
+		first["counts"],
+	)
 	check(
 		first["counts"]["created"]["assignments"] == preview["to_create"]["assignments"],
 		"every offered assignment was created",
@@ -388,7 +401,9 @@ def phase_after_reinstall(_arguments):
 	after = live_counts()
 
 	check(after["serials"] == preview["to_create"]["serials"], "the serials are live again", after)
-	check(after["assignments"] == preview["to_create"]["assignments"], "the assignments are live again", after)
+	check(
+		after["assignments"] == preview["to_create"]["assignments"], "the assignments are live again", after
+	)
 
 	# The relationships are the point of the whole exercise: which serial went on which invoice
 	# row. Compared against the export itself, not against a number.
@@ -448,7 +463,11 @@ def phase_after_reinstall(_arguments):
 	check(
 		restored == exported,
 		"creation, owner, modified and modified_by came back as they were",
-		{name: (restored.get(name), exported.get(name)) for name in exported if restored.get(name) != exported.get(name)},
+		{
+			name: (restored.get(name), exported.get(name))
+			for name in exported
+			if restored.get(name) != exported.get(name)
+		},
 	)
 
 	evidence(

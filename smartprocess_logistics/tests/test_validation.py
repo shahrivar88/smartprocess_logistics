@@ -244,9 +244,7 @@ class TestReplacedRows(UnitTestCase):
 					ExistingAssignment(row_key=second, normalized_serial="x1"),
 				)
 
-				result = plan(
-					[ROW_1, ROW_2], [("row-1", "X1")], existing=existing, replaced_rows=("row-1",)
-				)
+				result = plan([ROW_1, ROW_2], [("row-1", "X1")], existing=existing, replaced_rows=("row-1",))
 
 				self.assertFalse(result.is_valid)
 				self.assertEqual(result.issue_codes(), (CODE_ALREADY_REGISTERED,))

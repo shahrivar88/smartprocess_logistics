@@ -354,8 +354,7 @@ def check_all() -> list[str]:
 	for path, doc in parsed:
 		if doc.get("module") != expected_module:
 			problems.append(
-				f"{path.name}: module {doc.get('module')!r} does not match modules.txt"
-				f" ({expected_module!r})"
+				f"{path.name}: module {doc.get('module')!r} does not match modules.txt ({expected_module!r})"
 			)
 		_check_fields(path, doc, child_doctypes, problems)
 		_check_naming(path, doc, problems)

@@ -76,11 +76,7 @@ class FrappeGateway:
 
 		user_permissions = get_user_permissions(user) or {}
 		allowed = user_permissions.get("Company")
-		companies = (
-			frozenset(entry.get("doc") for entry in allowed if entry.get("doc"))
-			if allowed
-			else None
-		)
+		companies = frozenset(entry.get("doc") for entry in allowed if entry.get("doc")) if allowed else None
 
 		return authz.Principal(
 			user=user,
@@ -162,9 +158,7 @@ class FrappeGateway:
 		The company is read from the stored row, never from the request: it is what
 		`authz.require_company` decides on, so it must not be a value the caller supplied.
 		"""
-		return frappe.db.get_value(
-			ASSIGNMENT_DOCTYPE, name, ["sales_invoice", "company"], as_dict=True
-		)
+		return frappe.db.get_value(ASSIGNMENT_DOCTYPE, name, ["sales_invoice", "company"], as_dict=True)
 
 	def read_session_payload(self, name):
 		"""The stored payload text of one session, or `None`.

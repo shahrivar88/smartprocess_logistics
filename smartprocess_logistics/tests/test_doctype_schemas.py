@@ -43,18 +43,14 @@ class TestSetOnlyOnceIsRefused(UnitTestCase):
 					self.assertNotIn("set_only_once", field)
 
 	def test_the_check_reports_a_field_that_sets_it(self):
-		problems = self.check(
-			[{"fieldname": "installed_on", "fieldtype": "Datetime", "set_only_once": 1}]
-		)
+		problems = self.check([{"fieldname": "installed_on", "fieldtype": "Datetime", "set_only_once": 1}])
 
 		self.assertEqual(len(problems), 1)
 		self.assertIn("set_only_once", problems[0])
 		self.assertIn("installed_on", problems[0])
 
 	def test_the_check_accepts_the_corrected_metadata(self):
-		problems = self.check(
-			[{"fieldname": "installed_on", "fieldtype": "Datetime", "read_only": 1}]
-		)
+		problems = self.check([{"fieldname": "installed_on", "fieldtype": "Datetime", "read_only": 1}])
 
 		self.assertEqual(problems, [])
 
@@ -70,8 +66,7 @@ class TestSetOnlyOnceIsRefused(UnitTestCase):
 
 	def definitions(self):
 		return [
-			(path, json.loads(path.read_text(encoding="utf-8")))
-			for path in schema_checks.doctype_paths()
+			(path, json.loads(path.read_text(encoding="utf-8"))) for path in schema_checks.doctype_paths()
 		]
 
 	def check(self, fields):
@@ -129,7 +124,11 @@ class TestNormalizationVersionMatchesTheCode(UnitTestCase):
 			{
 				"name": "Logistics Settings",
 				"fields": [
-					{"fieldname": "normalization_version", "fieldtype": "Int", "default": NORMALIZATION_VERSION - 1}
+					{
+						"fieldname": "normalization_version",
+						"fieldtype": "Int",
+						"default": NORMALIZATION_VERSION - 1,
+					}
 				],
 			},
 			problems,
@@ -145,9 +144,7 @@ class TestNormalizationVersionMatchesTheCode(UnitTestCase):
 			pathlib.Path("logistics_serial.json"),
 			{
 				"name": "Logistics Serial",
-				"fields": [
-					{"fieldname": "normalization_version", "fieldtype": "Int", "default": "0"}
-				],
+				"fields": [{"fieldname": "normalization_version", "fieldtype": "Int", "default": "0"}],
 			},
 			problems,
 		)
@@ -156,8 +153,7 @@ class TestNormalizationVersionMatchesTheCode(UnitTestCase):
 
 	def definitions(self):
 		return [
-			(path, json.loads(path.read_text(encoding="utf-8")))
-			for path in schema_checks.doctype_paths()
+			(path, json.loads(path.read_text(encoding="utf-8"))) for path in schema_checks.doctype_paths()
 		]
 
 
@@ -182,9 +178,7 @@ class TestHiddenAndMandatoryIsRefused(UnitTestCase):
 					self.assertFalse(refused, f"{field.get('fieldname')} would be refused")
 
 	def test_the_check_reports_the_refused_combination(self):
-		problems = self.check(
-			[{"fieldname": "token", "fieldtype": "Data", "hidden": 1, "reqd": 1}]
-		)
+		problems = self.check([{"fieldname": "token", "fieldtype": "Data", "hidden": 1, "reqd": 1}])
 
 		self.assertEqual(len(problems), 1)
 		self.assertIn("token", problems[0])
@@ -198,9 +192,7 @@ class TestHiddenAndMandatoryIsRefused(UnitTestCase):
 		self.assertEqual(problems, [])
 
 	def test_the_check_accepts_a_hidden_field_that_is_not_required(self):
-		problems = self.check(
-			[{"fieldname": "token", "fieldtype": "Data", "hidden": 1, "read_only": 1}]
-		)
+		problems = self.check([{"fieldname": "token", "fieldtype": "Data", "hidden": 1, "read_only": 1}])
 
 		self.assertEqual(problems, [])
 
@@ -222,8 +214,7 @@ class TestHiddenAndMandatoryIsRefused(UnitTestCase):
 
 	def definitions(self):
 		return [
-			(path, json.loads(path.read_text(encoding="utf-8")))
-			for path in schema_checks.doctype_paths()
+			(path, json.loads(path.read_text(encoding="utf-8"))) for path in schema_checks.doctype_paths()
 		]
 
 	def check(self, fields):

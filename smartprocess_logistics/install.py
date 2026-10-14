@@ -213,9 +213,7 @@ def _paged(doctype, filters, fields=None):
 	offset = 0
 
 	while True:
-		page = frappe.get_list(
-			doctype, filters=filters, fields=fields, limit=NAMES_PAGE_SIZE, offset=offset
-		)
+		page = frappe.get_list(doctype, filters=filters, fields=fields, limit=NAMES_PAGE_SIZE, offset=offset)
 
 		rows.extend(page)
 
@@ -270,9 +268,7 @@ def _role_linking_fields():
 
 		fields.extend(
 			(row.get("parent"), row.get("fieldname"))
-			for row in _paged(
-				doctype, {"fieldtype": "Link", "options": "Role"}, ["parent", "fieldname"]
-			)
+			for row in _paged(doctype, {"fieldtype": "Link", "options": "Role"}, ["parent", "fieldname"])
 			if row.get("parent") and row.get("fieldname")
 		)
 

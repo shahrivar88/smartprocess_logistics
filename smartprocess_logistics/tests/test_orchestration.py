@@ -274,9 +274,7 @@ class TestRunRewrite(UnitTestCase):
 		self.assertEqual(outcome.deleted, 0)
 
 	def test_an_import_keeps_what_the_row_already_has(self):
-		gateway = FakeGateway(
-			existing=(ExistingAssignment(row_key="row-1", normalized_serial="a0"),)
-		)
+		gateway = FakeGateway(existing=(ExistingAssignment(row_key="row-1", normalized_serial="a0"),))
 		outcome = run_rewrite(rewrite(submissions=(("row-1", "A1"),)), gateway)
 
 		self.assertEqual(outcome.accepted, 1)
@@ -438,9 +436,7 @@ class TestRunRewrite(UnitTestCase):
 		self.assertLess(
 			gateway.calls.index("delete_row_assignments"), gateway.calls.index("insert_assignments")
 		)
-		self.assertEqual(
-			sorted(written.normalized_serial for written in gateway.written), ["a1", "a9"]
-		)
+		self.assertEqual(sorted(written.normalized_serial for written in gateway.written), ["a1", "a9"])
 
 
 class TestRunConfirmation(UnitTestCase):

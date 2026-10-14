@@ -121,9 +121,7 @@ class TestCollationAgreement(UnitTestCase):
 		looser = [
 			(first, second)
 			for first, second, database_equal in COLLATION_VERDICTS
-			if not database_equal
-			and _app_equal(first, second)
-			and (first, second) not in documented
+			if not database_equal and _app_equal(first, second) and (first, second) not in documented
 		]
 
 		self.assertEqual(looser, [], msg=f"app is coarser than the collation on: {looser}")

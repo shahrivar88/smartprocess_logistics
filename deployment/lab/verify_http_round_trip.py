@@ -199,13 +199,17 @@ def main():
 	)
 	preview = message_of(text)
 
-	recorder.check(status == 200 and isinstance(preview, dict), "preview_serial_restore answers", f"HTTP {status}")
+	recorder.check(
+		status == 200 and isinstance(preview, dict), "preview_serial_restore answers", f"HTTP {status}"
+	)
 
 	if not isinstance(preview, dict):
 		return 1
 
 	token = preview.get("token")
-	print(f"       preview: to_create={preview.get('to_create')} conflicts={preview.get('conflicts')} token={'yes' if token else 'MISSING'}")
+	print(
+		f"       preview: to_create={preview.get('to_create')} conflicts={preview.get('conflicts')} token={'yes' if token else 'MISSING'}"
+	)
 
 	recorder.check(bool(token), "the preview returns a token")
 
@@ -237,7 +241,11 @@ def main():
 	)
 	applied = message_of(text)
 
-	recorder.check(status == 200 and isinstance(applied, dict), "apply_serial_restore with the token answers", f"HTTP {status}")
+	recorder.check(
+		status == 200 and isinstance(applied, dict),
+		"apply_serial_restore with the token answers",
+		f"HTTP {status}",
+	)
 
 	if isinstance(applied, dict):
 		print(f"       apply counts: {applied['counts']}")

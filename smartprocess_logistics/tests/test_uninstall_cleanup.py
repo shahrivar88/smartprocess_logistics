@@ -214,9 +214,7 @@ class UninstallCleanupTest(UnitTestCase):
 
 	def test_a_child_icon_of_this_apps_icon_is_removed_too(self):
 		bench = self.with_navigation(populated_bench(), shipped_icon_name())
-		bench.tables["Desktop Icon"].append(
-			{"name": "child", "parent_icon": shipped_icon_name()}
-		)
+		bench.tables["Desktop Icon"].append({"name": "child", "parent_icon": shipped_icon_name()})
 		bench = self.given(bench)
 
 		report = self.load().after_uninstall()

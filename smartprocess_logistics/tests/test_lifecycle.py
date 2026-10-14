@@ -271,9 +271,7 @@ class AfterMigrateTest(LifecycleTestCase):
 		install.after_migrate()
 
 		self.assertEqual(sorted(bench.roles), sorted([VIEWER, EDITOR, MANAGER]))
-		self.assertEqual(
-			self.added_constraint_names(), ["unique_item_serial", "unique_invoice_serial"]
-		)
+		self.assertEqual(self.added_constraint_names(), ["unique_item_serial", "unique_invoice_serial"])
 		self.assertEqual(len(bench.settings.item_markers), len(DEFAULT_ITEM_MARKERS))
 		self.assertEqual(bench.settings.installed_on, bench.now)
 
@@ -290,9 +288,7 @@ class AfterMigrateTest(LifecycleTestCase):
 	def test_a_constraint_that_already_covers_the_right_columns_is_left_alone(self):
 		bench = bare_bench()
 		bench.add_index(SERIAL, "unique_item_serial", ["item_code", "normalized_serial"])
-		bench.add_index(
-			ASSIGNMENT, "unique_invoice_serial", ["sales_invoice", "normalized_serial"]
-		)
+		bench.add_index(ASSIGNMENT, "unique_invoice_serial", ["sales_invoice", "normalized_serial"])
 		self.given(bench)
 		install = self.load_install()
 
@@ -515,9 +511,7 @@ class SeedIdempotencyTest(LifecycleTestCase):
 		first = (len(self.bench.settings.delimiters), len(self.bench.settings.item_markers))
 		install.after_migrate()
 
-		self.assertEqual(
-			(len(self.bench.settings.delimiters), len(self.bench.settings.item_markers)), first
-		)
+		self.assertEqual((len(self.bench.settings.delimiters), len(self.bench.settings.item_markers)), first)
 		self.assertEqual(self.bench.settings.saves, 1)
 
 
@@ -539,9 +533,7 @@ class ConstraintGuardTest(LifecycleTestCase):
 		"""`add_unique` looks in `TABLE_CONSTRAINTS`; the guard reads `STATISTICS`. A plain
 		index with the right name would look enforced while enforcing nothing."""
 		bench = bare_bench()
-		bench.add_index(
-			SERIAL, "unique_item_serial", ["item_code", "normalized_serial"], unique=False
-		)
+		bench.add_index(SERIAL, "unique_item_serial", ["item_code", "normalized_serial"], unique=False)
 		self.given(bench)
 		install = self.load_install()
 
@@ -569,9 +561,7 @@ class ConstraintGuardTest(LifecycleTestCase):
 		for call in catalogue_reads:
 			self.assertIn("information_schema.STATISTICS", call["query"])
 			self.assertIn(call["params"]["table"], (f"tab{SERIAL}", f"tab{ASSIGNMENT}"))
-			self.assertIn(
-				call["params"]["constraint"], ("unique_item_serial", "unique_invoice_serial")
-			)
+			self.assertIn(call["params"]["constraint"], ("unique_item_serial", "unique_invoice_serial"))
 
 
 class BlastRadiusTest(LifecycleTestCase):
@@ -762,7 +752,9 @@ class PurgeStaleSessionsTest(LifecycleTestCase):
 		install = self.load_install()
 		store = FakeSessionStore(
 			sessions=(
-				stored_session("LIS-old", APPLIED, applied_at=CLEANUP_CLOCK - timedelta(days=RETENTION_DAYS + 1)),
+				stored_session(
+					"LIS-old", APPLIED, applied_at=CLEANUP_CLOCK - timedelta(days=RETENTION_DAYS + 1)
+				),
 				stored_session("LIS-stale", PREPARED, expires_at=CLEANUP_CLOCK - timedelta(minutes=5)),
 				stored_session("LIS-fresh", PREPARED, expires_at=CLEANUP_CLOCK + timedelta(minutes=5)),
 			)
@@ -793,7 +785,9 @@ class PurgeStaleSessionsTest(LifecycleTestCase):
 		self.given(bench)
 		install = self.load_install()
 		store = FakeSessionStore(
-			sessions=(stored_session("LIS-stale", PREPARED, expires_at=CLEANUP_CLOCK - timedelta(minutes=5)),),
+			sessions=(
+				stored_session("LIS-stale", PREPARED, expires_at=CLEANUP_CLOCK - timedelta(minutes=5)),
+			),
 			contended=True,
 		)
 
@@ -811,7 +805,9 @@ class PurgeStaleSessionsTest(LifecycleTestCase):
 		install = self.load_install()
 		store = FakeSessionStore(
 			sessions=tuple(
-				stored_session(f"LIS-{index:04d}", APPLIED, applied_at=CLEANUP_CLOCK - timedelta(days=RETENTION_DAYS + 1))
+				stored_session(
+					f"LIS-{index:04d}", APPLIED, applied_at=CLEANUP_CLOCK - timedelta(days=RETENTION_DAYS + 1)
+				)
 				for index in range(PURGE_BATCH + 25)
 			)
 		)

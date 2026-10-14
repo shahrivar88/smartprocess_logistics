@@ -248,4 +248,6 @@ def split_typed_list(text, delimiters, max_tokens=MAX_TOKENS):
 	"""
 	delimiter_set = DelimiterSet.of(tuple(delimiters) + TYPED_SEPARATORS)
 
-	return tuple(token.strip() for token in split_tokens(text, delimiter_set, max_tokens=max_tokens) if token.strip())
+	return tuple(
+		token.strip() for token in split_tokens(text, delimiter_set, max_tokens=max_tokens) if token.strip()
+	)

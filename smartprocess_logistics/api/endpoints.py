@@ -142,8 +142,7 @@ def _status(gateway, invoice_name):
 			serials.setdefault(row_key, []).append(assignment["serial_no"])
 
 	coverages = [
-		row_coverage(row.row_key, row.item_code, row.invoiced_qty, counts.get(row.row_key, 0))
-		for row in rows
+		row_coverage(row.row_key, row.item_code, row.invoiced_qty, counts.get(row.row_key, 0)) for row in rows
 	]
 	summary = coverage_summary(coverages)
 
@@ -574,9 +573,7 @@ def _preview(content, filename, request, limits):
 		frappe.throw(_("محتوای فایل باید متن باشد."))
 
 	if len(content) > limits.max_bytes * 2 + MAX_DATA_URL_OVERHEAD:
-		frappe.throw(
-			_("حجم فایل بیش از حد مجاز است: {0}.").format(describe_bytes(limits.max_bytes))
-		)
+		frappe.throw(_("حجم فایل بیش از حد مجاز است: {0}.").format(describe_bytes(limits.max_bytes)))
 
 	content = payload_bytes(content)
 
@@ -604,9 +601,7 @@ def _store_session(gateway, invoice, preview, principal):
 	from frappe.utils import add_to_date
 
 	settings = gateway.settings()
-	submissions = [
-		{"row_key": item.row_key, "serial": item.serial.original} for item in preview.accepted
-	]
+	submissions = [{"row_key": item.row_key, "serial": item.serial.original} for item in preview.accepted]
 	payload = {
 		"submissions": submissions,
 		"delimiters": list(preview.delimiters),

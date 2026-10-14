@@ -244,9 +244,7 @@ def _candidates_from_marked_headers(data_rows, marked_headers):
 
 	for column, match in marked_headers:
 		if match.row_index is None:
-			issues.append(
-				_issue(CODE_MARKER_ROW_MISSING, f"نشانگر ستون {column} شمارهٔ ردیف معتبری ندارد.")
-			)
+			issues.append(_issue(CODE_MARKER_ROW_MISSING, f"نشانگر ستون {column} شمارهٔ ردیف معتبری ندارد."))
 			continue
 		columns.append((column, match.row_index))
 
@@ -370,9 +368,7 @@ def _to_submissions(candidates, request):
 			target = request.rows[0].row_key
 
 		if target is None:
-			issues.append(
-				_issue(CODE_TARGET_ROW_REQUIRED, "برای این چیدمان باید ردیف فاکتور انتخاب شود.")
-			)
+			issues.append(_issue(CODE_TARGET_ROW_REQUIRED, "برای این چیدمان باید ردیف فاکتور انتخاب شود."))
 			return submissions, issues
 
 		if not any(row.row_key == target for row in request.rows):
@@ -428,8 +424,9 @@ def _to_submissions(candidates, request):
 	return submissions, issues
 
 
-def build_preview(candidates, request, *, source_issues=(), blank_tokens=0, numeric_cells=0,
-                  sheets=(), encoding=None):
+def build_preview(
+	candidates, request, *, source_issues=(), blank_tokens=0, numeric_cells=0, sheets=(), encoding=None
+):
 	"""Validate a file's contents and return the preview an operator confirms."""
 	if request.layout not in LAYOUTS:
 		raise ValueError(f"چیدمان ناشناخته: {request.layout}")

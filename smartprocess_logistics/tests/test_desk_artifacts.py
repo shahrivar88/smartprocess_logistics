@@ -144,8 +144,7 @@ class TestDesktopIcon(UnitTestCase):
 		roles = {row["role"] for row in doc.get("roles") or []}
 
 		self.assertTrue(
-			{"Logistics Serial Viewer", "Logistics Serial Editor", "Logistics Serial Manager"}
-			<= roles
+			{"Logistics Serial Viewer", "Logistics Serial Editor", "Logistics Serial Manager"} <= roles
 		)
 
 
@@ -160,7 +159,9 @@ class TestWorkspace(UnitTestCase):
 	def test_the_cards_the_content_names_are_the_cards_the_links_define(self):
 		_path, doc = self.workspace()
 
-		named = [block["data"]["card_name"] for block in json.loads(doc["content"]) if block["type"] == "card"]
+		named = [
+			block["data"]["card_name"] for block in json.loads(doc["content"]) if block["type"] == "card"
+		]
 		defined = [link["label"] for link in doc["links"] if link["type"] == "Card Break"]
 
 		self.assertEqual(named, defined)

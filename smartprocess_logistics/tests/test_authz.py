@@ -215,9 +215,7 @@ class TestSessionOwnership(UnitTestCase):
 
 class TestAuthorize(UnitTestCase):
 	def test_a_read_endpoint_needs_its_invoice(self):
-		self.assertTrue(
-			authorize(EDITOR_ACCOUNT, "get_invoice_serial_status", invoice=ALPHA)
-		)
+		self.assertTrue(authorize(EDITOR_ACCOUNT, "get_invoice_serial_status", invoice=ALPHA))
 
 	def test_confirm_checks_the_session_owner(self):
 		self.assertTrue(

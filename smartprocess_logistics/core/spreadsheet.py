@@ -255,8 +255,9 @@ def iter_workbook_sheets(workbook):
 	Every cell is taken with `data_only=False`, so a formula arrives as a formula.
 	"""
 	for worksheet in workbook.worksheets:
-		yield worksheet.title, (
-			tuple((cell.value, cell.data_type) for cell in row) for row in worksheet.iter_rows()
+		yield (
+			worksheet.title,
+			(tuple((cell.value, cell.data_type) for cell in row) for row in worksheet.iter_rows()),
 		)
 
 

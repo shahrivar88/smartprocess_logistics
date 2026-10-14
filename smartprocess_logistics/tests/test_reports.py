@@ -369,9 +369,10 @@ class TestDateRange(UnitTestCase):
 		self.assertEqual(caught.exception.code, CODE_BAD_DATE_RANGE)
 
 	def test_the_missing_report_uses_the_same_date_filter(self):
-		self.assertIn("si.posting_date BETWEEN", missing(
-			filters={"from_date": "2026-01-01", "to_date": "2026-12-31"}
-		).sql)
+		self.assertIn(
+			"si.posting_date BETWEEN",
+			missing(filters={"from_date": "2026-01-01", "to_date": "2026-12-31"}).sql,
+		)
 
 
 class TestRequirementFormula(UnitTestCase):
@@ -396,9 +397,7 @@ class TestRequirementFormula(UnitTestCase):
 		self.assertIn("COALESCE(a.registered, 0) < CEIL(", missing().sql)
 
 	def test_the_complete_rows_can_be_asked_for(self):
-		self.assertNotIn("COALESCE(a.registered, 0) < CEIL(", missing(
-			filters={"only_incomplete": False}
-		).sql)
+		self.assertNotIn("COALESCE(a.registered, 0) < CEIL(", missing(filters={"only_incomplete": False}).sql)
 
 
 class TestGrainAndColumns(UnitTestCase):

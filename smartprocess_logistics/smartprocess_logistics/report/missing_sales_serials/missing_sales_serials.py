@@ -107,7 +107,9 @@ def _missing_filters(filters):
 		company=filters.get("company"),
 		docstatuses=tuple(docstatuses),
 		include_cancelled=bool(filters.get("include_cancelled")),
-		only_incomplete=True if filters.get("only_incomplete") is None else bool(filters.get("only_incomplete")),
+		only_incomplete=True
+		if filters.get("only_incomplete") is None
+		else bool(filters.get("only_incomplete")),
 		page_length=filters.get("page_length"),
 		offset=filters.get("offset"),
 	)

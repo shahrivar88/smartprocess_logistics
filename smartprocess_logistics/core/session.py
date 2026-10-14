@@ -255,11 +255,7 @@ def select_purgeable(sessions, now, limit=PURGE_BATCH, retention_days=RETENTION_
 	queue from its head, so a site that fell behind catches up instead of removing whichever rows
 	the database happened to return.
 	"""
-	purgeable = [
-		session
-		for session in sessions
-		if is_purgeable(session, now, retention_days=retention_days)
-	]
+	purgeable = [session for session in sessions if is_purgeable(session, now, retention_days=retention_days)]
 
 	purgeable.sort(key=lambda session: (finished_at(session), session.name))
 

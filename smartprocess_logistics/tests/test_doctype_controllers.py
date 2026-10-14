@@ -56,9 +56,7 @@ class TestDocTypeControllers(UnitTestCase):
 		frappe.model = model
 		model.document = document
 
-		sys.modules.update(
-			{"frappe": frappe, "frappe.model": model, "frappe.model.document": document}
-		)
+		sys.modules.update({"frappe": frappe, "frappe.model": model, "frappe.model.document": document})
 
 	def tearDown(self):
 		for name in self._imported:
@@ -73,8 +71,7 @@ class TestDocTypeControllers(UnitTestCase):
 	def definitions(self):
 		"""(json path, parsed JSON) for every DocType in the app."""
 		return [
-			(path, json.loads(path.read_text(encoding="utf-8")))
-			for path in schema_checks.doctype_paths()
+			(path, json.loads(path.read_text(encoding="utf-8"))) for path in schema_checks.doctype_paths()
 		]
 
 	def load(self, json_path):
@@ -151,7 +148,9 @@ class TestDocTypeControllers(UnitTestCase):
 
 				imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)]
 				self.assertEqual(len(imports), 1)
-				self.assertEqual((imports[0].module, imports[0].names[0].name), ("frappe.model.document", "Document"))
+				self.assertEqual(
+					(imports[0].module, imports[0].names[0].name), ("frappe.model.document", "Document")
+				)
 
 	# --- coverage -----------------------------------------------------------------------
 
