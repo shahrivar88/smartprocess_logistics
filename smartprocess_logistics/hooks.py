@@ -1,12 +1,21 @@
 """Hook configuration for smartprocess_logistics.
 
 Everything this app registers is here: two lifecycle hooks (`after_install`, `after_migrate`),
-the cleanup that runs after a removal, one scheduled job, the two Desk assets, the two form
-scripts and the two company conditions the framework's own list queries use. Each is idempotent
-and none calls `ignore_permissions`. What is deliberately **absent** — `doc_events`,
-`override_doctype_class`, `override_whitelisted_methods`, monkey patching — is listed at the
-bottom of this file with the reason.
+the cleanup that runs after a removal, one scheduled job, the Desk assets, the approved form
+scripts, the two company conditions the framework's own list queries use, and the document
+events of the managed workflow. Each is idempotent and none calls `ignore_permissions`. What
+is deliberately **absent** — `override_doctype_class`, `override_whitelisted_methods`, monkey
+patching — is listed at the bottom of this file with the reason.
+
+The approved composition lives in `hooks_composition.py`. The development tree additionally
+loads `hooks_commitment.py`, which appends the paused committed-stock panel and registers its
+two Sales Invoice lifecycle handlers and Delivery Note validator. The approved release subset
+excludes that module; this file then imports and registers only the approved hooks.
 """
+
+import importlib.util
+
+from smartprocess_logistics import hooks_composition
 
 app_name = "smartprocess_logistics"
 app_title = "SmartProcess Logistics"
@@ -27,22 +36,9 @@ required_apps = ["frappe", "erpnext"]
 # The report's own `.js` is loaded by Frappe from its folder and needs no hook.
 app_include_css = ["/assets/smartprocess_logistics/css/logistics.css"]
 
-doctype_js = {
-	# Both are inlined into the Sales Invoice form meta, in this order, and Frappe accepts a list
-	# here: `desk/form/meta.py::get_code_files_via_hooks` wraps a single path in a list and then
-	# reads each one. They are two files because they are two acts — registering the labels in an
-	# operator's hand, and moving the serials of a cancelled invoice onto the one that replaced it —
-	# and the second is a review of two documents rather than a scan session.
-	"Sales Invoice": [
-		"public/js/sales_invoice_serial_button.js",
-		"public/js/sales_invoice_serial_transfer.js",
-	],
-	# The two buttons that export this app's records and import them back. They live on the
-	# Settings single because that is where an administrator looks for them, and they are the
-	# only supported way to carry the history across a removal — a full site backup protects the
-	# site, this protects the records when the app itself goes away.
-	"Logistics Settings": "public/js/logistics_settings_transfer.js",
-}
+# The approved scripts. The development composition appends the committed-stock panel file from
+# `hooks_commitment.py`; the release subset leaves it out.
+doctype_js = hooks_composition.approved_doctype_js()
 
 
 # --- The framework's own queries ---------------------------------------------------------
@@ -60,6 +56,19 @@ permission_query_conditions = {
 	"Logistics Serial": "smartprocess_logistics.permissions.serial_query_conditions",
 	"Logistics Serial Assignment": ("smartprocess_logistics.permissions.assignment_query_conditions"),
 }
+
+
+# --- Document events --------------------------------------------------------------------
+#
+# The approved composition is the invoice-first guards and the virtual-warehouse policy. The
+# development tree extends it with the paused committed-stock handlers from
+# `hooks_commitment.py`; the approved release subset excludes that module and gets this dict
+# unchanged. The extension keeps the development order: the committed Delivery Note validator
+# runs before the approved virtual-warehouse validator.
+doc_events = hooks_composition.approved_doc_events()
+
+if importlib.util.find_spec("smartprocess_logistics.hooks_commitment"):
+	importlib.import_module("smartprocess_logistics.hooks_commitment").extend(doctype_js, doc_events)
 
 
 # --- Registered -------------------------------------------------------------------------
@@ -113,10 +122,15 @@ after_uninstall = "smartprocess_logistics.install.after_uninstall"
 
 # --- Never registered by this app ------------------------------------------------------
 #
-# doc_events on "Sales Invoice" are deliberately absent. `Document.hook` runs a handler
-# inside a try/finally, so an exception raised there aborts the invoice save and takes the
-# user's operation down with it. Orphaned assignments, shortages and overages are derived at
-# read time instead.
+# The validation handlers above are guards: they refuse a save and post nothing. The two Sales
+# Invoice lifecycle events are registered only by the development extension
+# (`hooks_commitment.py`), never by the approved composition; in the development tree they are
+# the one place this app writes an ERPNext document, and they do it through the standard
+# controller — a Material Transfer Stock Entry — inside the invoice's own request transaction,
+# so rollback is the framework's and no handler commits.
+# `Document.hook` runs a handler inside a try/finally, so an exception raised there aborts the
+# save, which is exactly what a guard, and a failed commitment, must do. Orphaned assignments,
+# shortages and overages are still derived at read time, never repaired by a hook.
 #
 # The app also never registers override_doctype_class, override_whitelisted_methods, monkey
 # patches, or a fixture that carries a host path, a site name or a port.

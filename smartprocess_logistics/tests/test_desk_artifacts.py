@@ -52,6 +52,17 @@ def read_json(path):
 	return json.loads(path.read_text(encoding="utf-8"))
 
 
+def hook_sources():
+	"""The hook files that carry the registration a Desk test is looking for.
+
+	`hooks.py` holds the approved composition call; `hooks_composition.py` names the approved
+	scripts; `hooks_commitment.py` names the development-only committed-stock script. The
+	release subset has the first two and not the third, so these checks work in both trees.
+	"""
+	names = ("hooks.py", "hooks_composition.py", "hooks_commitment.py")
+	return "\n".join((APP / name).read_text(encoding="utf-8") for name in names if (APP / name).exists())
+
+
 def sidebar_files():
 	return sorted(path for path in SIDEBAR_DIR.glob("*.json"))
 
@@ -262,7 +273,7 @@ class TestReport(UnitTestCase):
 
 class TestHooksPointAtRealFiles(UnitTestCase):
 	def test_the_files_the_desk_loads_exist(self):
-		hooks = (APP / "hooks.py").read_text(encoding="utf-8")
+		hooks = hook_sources()
 
 		# `doctype_js` is a path from the app package; `app_include_css` is the URL the browser
 		# asks for, which `/assets/<app>/` maps onto the package's `public` directory.
@@ -298,7 +309,7 @@ class TestTheTransferWindow(UnitTestCase):
 		"""Frappe accepts a list here, and it reads each path: `get_code_files_via_hooks` wraps a
 		single path in one. Registering the second script as a second dict key would replace the
 		first, because a dict has no second key of the same name."""
-		hooks = (APP / "hooks.py").read_text(encoding="utf-8")
+		hooks = hook_sources()
 
 		self.assertIn('"Sales Invoice": [', hooks)
 
@@ -353,13 +364,13 @@ class TestTheTransferWindow(UnitTestCase):
 		self.assertNotIn("capacity -", source)
 
 	def test_the_settings_script_is_one_of_the_files_the_desk_loads(self):
-		hooks = (APP / "hooks.py").read_text(encoding="utf-8")
+		hooks = hook_sources()
 
 		self.assertIn("public/js/logistics_settings_transfer.js", hooks)
 
 	def test_every_script_the_app_ships_is_named_in_a_hook(self):
 		"""A script nothing loads is a script that was written and never wired."""
-		hooks = (APP / "hooks.py").read_text(encoding="utf-8")
+		hooks = hook_sources()
 
 		for path in sorted((APP / "public" / "js").glob("*.js")):
 			with self.subTest(script=path.name):

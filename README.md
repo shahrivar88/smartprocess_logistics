@@ -44,6 +44,18 @@ flag was when an invoice was written, and no historical snapshot has been approv
 hand as well as by the suite: the Desk navigation, the serial dialog, the report, the endpoints,
 company isolation against two companies, and an upgrade run twice.
 
+**0.5.0 — release candidate for purchasing, virtual warehouses and the Stock Entry Item filter.**
+It adds the invoice-first purchase workflow, the `Warehouse Type` classification with the
+Material-Transfer-only movement rule, and the source-warehouse Item selector with quantities and
+permission checks. It does **not** include the paused Sales Invoice committed-stock UI or any
+committed-warehouse checks: no commitment module is included or loaded. The managed Delivery Note
+row/item/company checks and the no-second-deduction guard (I30) remain; only the committed-
+warehouse checks are paused. Verified on `SmartProcessERP` (Frappe v16, ERPNext 16.35.0, port
+8080) by the database-free suite and the integration proofs in `docs/test-manifest.md`; the
+candidate tree was additionally imported and exercised there for the Item selector, the virtual
+Delivery Note refusal and I30. See `CHANGELOG.md` for the exact scope and known limitations. Not
+tagged or published yet.
+
 **0.4.0 — a release candidate, not deployed.** It adds the transfer of a cancelled invoice's
 serials onto its amendment, and the three restores (see below). None of it is installed on
 `SmartProcessERP` and none of it has been migrated anywhere. It has been run end to end on the isolated lab instead — the eight phases of
@@ -257,7 +269,7 @@ that mapping is confirmed.
 
 ## Secure API layer
 
-`smartprocess_logistics/api/` holds ten whitelisted endpoints and the gateway they drive. They
+`smartprocess_logistics/api/` holds sixteen whitelisted endpoints and the gateway they drive. They
 are reachable as soon as the app is installed, and reachable only through that gateway.
 
 | Endpoint | Needs | Does |
@@ -277,6 +289,39 @@ Every decision lives in `core`, which is why the authorization, the reconciliati
 rules and the failure behaviour are tested without a site. An endpoint only parses arguments,
 builds a principal, and wires the two together. No endpoint uses `ignore_permissions`, and none
 of them commits.
+
+One more whitelisted read lives outside this table: `warehouse.item_search.items_in_stock`, the
+Stock Entry Item Code selector. It is a Frappe Link query rather than a serial endpoint, so it
+is gated by ordinary Frappe permissions — Warehouse read and company on the named warehouse,
+Item read, and `get_match_cond("Item")` for role and Item user permissions — not by the app's
+Viewer/Editor/Manager levels. In a Material Transfer it offers only Items with positive
+`actual_qty` in the row's source warehouse, which ERPNext 16 does not do natively. Its statement
+is built in `core/stock_search.py` and it writes nothing; the standard submit still decides
+whether the movement may happen.
+
+## Virtual warehouses
+
+A warehouse is **virtual** when its standard `Warehouse Type` is one of `Virtual`, `مجازی` or
+`Transit` (a site may override the list with `sp_virtual_warehouse_types`). Every other leaf
+warehouse is physical. The stock in a virtual warehouse is ordinary ERPNext inventory: it has a
+Bin, a value and Stock Ledger Entries, and it counts in company assets. It is never sellable,
+deliverable or reservable.
+
+Create any number of virtual warehouses from the standard Warehouse form, set their type, and
+move stock with the standard Stock Entry **Material Transfer** in all four directions. No
+custom arrival API, destination whitelist, purchase-receipt link or new field is involved.
+Virtual stock may only be moved by Material Transfer or received by a standard Purchase Receipt;
+an outbound Sales Invoice or Delivery Note, or a Stock Reservation Entry, that names it is
+refused server-side. The virtual-warehouse guard does not narrow returns; existing managed-
+workflow rules still apply.
+Purchasing is invoice-first for every domestic and foreign stock purchase: the Purchase Invoice
+bills the full amount with no stock, and every stock row of the Purchase Receipt must link a
+submitted Purchase Invoice. A linked stock row must use the invoice row's UOM and conversion
+factor, so ERPNext's `received_qty` and `per_received` stay consistent. The receipt may receive
+any part of it into a virtual or physical warehouse. Service/non-stock rows, fixed assets and
+opening entries keep their standard workflow.
+A Purchase Invoice Return/Debit Note may be financial-only (`update_stock = 0`); stock returns
+must use a Purchase Receipt Return.
 
 `set_row_serials` and `add_row_serials` differ in what they do to a row that already holds
 serials, and the difference is deliberate. `set_row_serials` names one row and **replaces** it:

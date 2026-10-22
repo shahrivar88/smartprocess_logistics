@@ -13,6 +13,9 @@ Rules:
 5. Delete only what this app owns. Serial and assignment records are owned by the app;
    Company, Customer, Item and Sales Invoice records belong to the site.
 
+The proof scripts named below were development-environment artifacts. They are recorded as
+evidence but are not part of the 0.5.0 release candidate.
+
 | Date | Phase | Site | DocType | Name | Purpose | Created by | Deleted on |
 | ---- | ----- | ---- | ------- | ---- | ------- | ---------- | ---------- |
 | 2026-10-13 | 4 | SmartProcessERP | Item | `SP-TEST-WARRANTY-ITEM` | A non-stock item carrying `sp_serial_required`, so the report and the button have something eligible | main agent | **kept** |
@@ -80,6 +83,11 @@ table has to track — everything it plants, it removes.
 | 2026-10-14 | 7 | `sp_logistics_lab` | Logistics Serial, Logistics Serial Assignment | the `BATCH-` labels and the assignments they were put on, including the ones a lost race created and rolled back | The batch checks: refusal, reuse, quantity, concurrency, retry | `verify_batch_intake.py` | 2026-10-14, by its own `disarm` (14 assignments, 17 serials) |
 | 2026-10-14 | 7 | `sp_logistics_lab` | User | `lab-batch-editor@`, `lab-batch-viewer@`, `lab-batch-norole@`, `lab-batch-restricted@example.test` | The four principals of the permission and company checks | `verify_batch_intake.py arm` | 2026-10-14, with their User Permissions |
 | 2026-10-14 | 7 | `sp_logistics_lab` | Sales Invoice | `ACC-SINV-2026-00005` | The submitted-then-cancelled invoice the lifecycle check needs; `docstatus 2` is reachable only by cancelling, and deleting it would mean removing the reversed `GL Entry` rows the framework keeps | `verify_batch_intake.py arm` | **kept** — a lab record holding no serials |
+| 2026-10-22 | Stock Entry item filter | SmartProcessERP | Item, Stock Entry, User | `SP-SEF-X/Y/Z/ONLY-D/ZERO/V`, `MAT-STE-2026-00116` … `00128`, `sp-sef-tester@`, `sp-sef-restricted@` | Isolated stock in `SP-PH-C - SP`, `SP-PH-D - SP` and `SP-VW-A - SP`, one submitted transfer and one disposable Warehouse-restricted user, to test the source-warehouse Item filter | `stock_entry_item_filter_proof.py` | 2026-10-22, by `cleanup_stock_entry_item_filter.py`; zero Bin rows and no Items remain |
+| 2026-10-22 | SRBNB audit | SmartProcessERP | Item, Purchase Invoice, Purchase Receipt, Landed Cost Voucher | `SP-SRBNB-LCV-067734`, `SP-SRBNB-PLAIN-067734`; `BI-260138` … `BI-260140`, `BR-260168` … `BR-260170`, `MAT-LCV-2026-00027` | Two controlled matched 5-of-5 return chains, with and without a 100,000 LCV, to explain the 733,333.33 SRBNB balance | the release-prep audit script | 2026-10-22; every document cancelled and deleted, both Items deleted, zero Bin rows |
+| 2026-10-22 | Release-prep rerun | SmartProcessERP | Item, User | `SP-UP-*-352867`, `SP-VW-SALE-857266`, `SP-SEF-*`; `sp-audit-http@`, `sp-audit-browser@`, `sp-audit-item@`, `sp-audit-dev@` | Rehearsed purchase, virtual-sale and Item-filter proofs after the boundary fix, plus disposable principals for the HTTP, Item-user-permission and browser composition checks | main agent | 2026-10-22; documents cancelled, Items and Users deleted, zero Bin rows |
+| 2026-10-22 | Commitment isolation | `sp-release-0.5.0` temp tree | — | — | A temporary copy of only the approved files, with the paused commitment modules removed, to prove the release composition imports and registers without them; no site records created | main agent | 2026-10-22; the temp tree was removed after the checks |
+| 2026-10-22 | I30 Delivery Note audit | SmartProcessERP | Item, Delivery Note, Product Bundle | `SP-DN-AUDIT-221496`, `SP-DN-AUDIT-212141`, `RG-260037` (draft), `SP-VW-BUNDLE-730714`, `SP-VW-COMP-730714` | An unlinked managed draft Delivery Note refused by both the approved and combined validators; a non-managed physical draft allowed and deleted; the virtual bundle Delivery Note refused and the physical bundle invoice posted and cancelled | main agent | 2026-10-22; drafts and Items deleted, documents cancelled, zero Bin rows |
 
 Nothing was created on `SmartProcessERP`. Its backend was restarted once, under the approval that
 names that step, and nothing else on it was touched: `Logistics Serial` 71, `Logistics Serial
@@ -588,3 +596,304 @@ of three on every run, and did not before that read was made locking.
 No row of this list belongs to `SmartProcessERP`, and none of it is written to a site that
 matters. `verify_isolation_cycle.py` refuses to run unless both the site name and the database
 name say it is the lab.
+
+## Phase 3B — invoice-first integrity guards (2026-10-20)
+
+The validation-only `doc_events` (`smartprocess_logistics/integrity.py`) are covered by
+`tests/test_integrity.py`: database-free tests over the pure rules in
+`smartprocess_logistics/core/integrity.py` and the registration/safety properties of the
+handlers. The full suite is **1,165 tests, OK (1 skip)**; `ruff check` and `ruff format --check`
+pass. The rules and their scope are recorded as I29–I33 in `docs/integrity-invariants.md`;
+I8 and I9 were amended because the app now has validation-only hooks on four financial
+documents.
+
+The production proof is `deployment/proofs/step3b_production_check.py`, run from
+`bench --site SmartProcessERP console` on **8080** with disposable `SP-3B` records. It exercises
+the four guards, partial deliveries, a partial receipt and SRBNB settlement, a purchase return
+with the missing `purchase_invoice_item`, a debit note, cancellation, amendment, a multi-invoice
+receipt with the same rate (allowed) and with different rates (refused), a non-managed standard
+sales invoice and a non-managed foreign purchase at the market rate (both allowed). All expected
+checks passed. The run leaves its identified records on 8080; it changes no setting and runs no
+migration.
+
+## Simplified virtual/physical warehouses (2026-10-21)
+
+The Transit-only arrival service and its per-company JSON configuration were removed. A
+warehouse is virtual when its standard `Warehouse Type` is in `sp_virtual_warehouse_types`
+(default `Virtual`, `مجازی`, `Transit`); every other leaf warehouse is physical. The
+database-free suite still runs **1,218 tests, OK (1 skip)** under `.venv`; `ruff check` and
+`ruff format --check` pass.
+
+`tests/test_warehouse_policy.py` covers the type classification, the four allowed transfer
+directions, the Material-Transfer-only rule for virtual movements and the virtual sales refusal.
+`tests/test_purchase_rules.py` now covers the renamed warehouse-neutral `purchase/receipt.py`
+and the surviving safety checks. `tests/test_integrity.py` also pins the return link when the
+original receipt row has no `purchase_invoice_item`: the unique invoice row is used, a missing
+or ambiguous row is refused, a Purchase Receipt Item name is never written into that field,
+and a return with no Purchase Invoice anywhere is left to the standard workflow. The
+development-only `tests/test_commitment.py` adds the virtual committed-warehouse refusal, the
+zero-sellable virtual source and its availability arithmetic; that test module is not part of
+this release candidate. The invariants are recorded as I39.
+
+The integration proof is `deployment/proofs/virtual_warehouse_workflow.py` on **8080** with
+isolated `SP-VW` records. It passed: a full USD Purchase Invoice with no stock and one supplier
+liability; 30 units into virtual A and 70 into physical C with `per_received = 100`; SRBNB
+reconciled to zero; an LCV on the virtual receipt; virtual→virtual, virtual→physical,
+physical→virtual and physical→physical transfers with no GL and total quantity 100; physical
+D sellable 15 with physical total 75; virtual A sellable 0; inventory GL 505,000,000; a
+foreign Payment Entry clearing the invoice; a purchase return of 2 from virtual; no Serial No
+created; virtual Sales Invoice, Delivery Note and Stock Reservation Entry refused with Persian
+messages; cross-company and Guest permission refusals; and a second submit of the same Stock
+Entry leaving stock unchanged.
+
+`deployment/proofs/virtual_concurrent_submit.py` ran twice at once against 15 + 15 from a
+virtual balance of 23: one submitted, the other raised `QueryDeadlockError`; the final balances
+were A 8 and B 15 with no extra stock. `deployment/proofs/virtual_physical_sale_proof.py`
+submitted a physical `Sales Invoice update_stock=1` and refused the same invoice from virtual
+A, then cancelled both documents. `deployment/proofs/virtual_bundle_guard_proof.py` created a
+Product Bundle and proved its `packed_items` cannot ship from virtual A, while the same bundle
+sold from physical C normally; both documents were cancelled.
+`deployment/proofs/virtual_unmanaged_return_proof.py` submitted a linked Purchase Receipt for an
+unmanaged item and then its standard return, confirming the new link fill and the stricter
+stock-receipt rule do not break an unmanaged item's return.
+`deployment/proofs/virtual_warehouse_cleanup.py` proved a Purchase Receipt cannot be cancelled
+while its stock has been transferred (`NegativeStockError`), then cancelled the whole
+disposable chain; no non-zero Bin remained for the test items.
+
+## Unified invoice-first purchase policy (2026-10-21)
+
+`core.integrity.purchase_invoice_problems` now applies to every stock Purchase Invoice, not
+only foreign or `sp_serial_required` rows. `update_stock = 1` is refused when any non-zero
+inventory row would post stock. The guard is currency-agnostic; the handler reads each Item's
+`is_stock_item` and `is_fixed_asset`. `purchase.rules.stock_receipt_problems` now requires a
+submitted Purchase Invoice on every non-zero stock Purchase Receipt row, regardless of the
+managed flag. Every linked stock row must also match the invoice's company, supplier, item,
+`purchase_invoice_item` parent, UOM and conversion factor; the existing rate/valuation check
+now runs for all linked stock rows, not only managed ones. Service/non-stock rows, fixed assets,
+zero quantities, returns/Debit Notes, opening entries and internal inter-company transfers keep
+their standard workflow. A submitted historical document is never inspected.
+
+`tests/test_integrity.py` and `tests/test_purchase_rules.py` cover the new scope: stock rows
+with and without `update_stock`, service/non-stock, fixed asset, zero quantity, return,
+opening, internal transfer, historical document, unlinked stock receipts, linked/unmanaged
+receipts, draft/cancelled invoices, supplier/company/item/PI-item identity, UOM/conversion
+factor and the named row in the Persian message. The full suite is
+**1,228 tests, OK (1 skip)** under `.venv`; `ruff check` and `ruff format --check` pass.
+
+`deployment/proofs/unified_purchase_policy_proof.py` ran on **8080** with disposable records:
+
+- domestic IRR Purchase Invoice 10,000,000 with no SLE and full payable/SRBNB accounting;
+- domestic receipts 30 into virtual A and 70 into physical C, `per_received = 100`, SRBNB zero;
+- domestic LCV 2,000,000 with no LCV GL;
+- domestic Purchase Receipt return of 5 and a submitted Debit Note of 100,000 with no SLE;
+- foreign USD Purchase Invoice 100 USD at 500,000 with no SLE;
+- foreign receipt of 10 units and a payment of 52,000,000 IRR for 100 USD, producing
+  `سود/زیان تبدیل - SP` 2,000,000 and clearing the invoice;
+- a service/non-stock Purchase Invoice with `update_stock = 1` submitted with no SLE;
+- domestic and foreign `update_stock = 1` attempts refused with the same Persian message;
+- an unlinked stock Purchase Receipt refused with the Persian invoice-first message;
+- Guest permission refused; and the whole chain cancelled with zero test stock.
+
+`deployment/proofs/purchase_link_integrity_probe.py` exercised the malicious/inconsistent
+links on **8080**: wrong supplier, wrong company, wrong item, a forged `purchase_invoice_item`,
+and a different UOM were refused by SmartProcess Logistics with the named Persian messages;
+sequential over-receipt was refused by ERPNext `OverAllowanceError`; a financial-only Debit
+Note posted no SLE; a stock-affecting PI Return was refused by SmartProcess Logistics; the
+valid partial receipts reached 100%, a Purchase Receipt Return reduced `received_qty` to 9
+and `per_received` to 90, and cancellation/amendment restored/carried the links correctly.
+The two-process concurrency probe produced one submitted receipt and one `QueryDeadlockError`,
+with `received_qty = 6` and no extra stock.
+
+`deployment/proofs/purchase_fx_regression.py` re-checked the existing FX safeguard: a
+matching-rate receipt was accepted and a receipt at 600,000 against a 500,000 invoice was
+refused with «نرخ تبدیل». Both documents were cancelled.
+
+## Stock Entry Item Code filter by source warehouse (2026-10-22)
+
+ERPNext 16.35.0 has no warehouse-aware Item selector for Stock Entry. The form's only query is
+`erpnext.controllers.queries.item({is_stock_item: 1})`; that query filters Items by themselves
+and does not join `Bin`, and `erpnext.queries.setup_warehouse_query` filters warehouses by the
+chosen item — the reverse direction. `erpnext.ItemSelector` is not wired to Stock Entry. So the
+filter is a custom Link query, the mechanism `frm.set_query` already supports.
+
+The client script `public/js/stock_entry_item_stock_filter.js` replaces the `item_code` query
+only when `purpose == "Material Transfer"`, resolving the source as the row's `s_warehouse`,
+else `from_warehouse`. Without a source it shows the Persian "select the source first" alert
+and returns no rows rather than an unfiltered list. Every other purpose keeps ERPNext's own
+query. A row source change re-checks the selected item through the same endpoint and shows a
+Persian warning without clearing the row or changing its quantity.
+
+The server endpoint `smartprocess_logistics.warehouse.item_search.items_in_stock` is a
+whitelisted read-only Link query. It refuses an unreadable, missing, group or wrong-company
+warehouse; requires Item read; applies `get_match_cond("Item")` (role permissions, Item user
+permissions, `if_owner` and the site's permission-query hooks) to the raw SQL; joins `Bin` for
+that warehouse with `actual_qty > 0`; and searches code and name with paging. `core/stock_search.py`
+builds the statement and formats the `Stock: N UOM` description without importing Frappe.
+
+`tests/test_stock_search.py` adds 16 database-free tests. The full suite is
+**1,244 tests, OK (11 skipped)**; `ruff check` and `ruff format --check` pass.
+
+`deployment/proofs/stock_entry_item_filter_proof.py` ran on **8080** with isolated `SP-SEF`
+items: C returned only X/Y/V, D only Z/ONLY-D, virtual A only V with `Stock: 4 Nos`, the
+zero-stock and elsewhere-stock items were absent, name and code search worked, exact lookup of
+a stockless item was empty, wrong company / empty / missing warehouse returned nothing, paging
+returned distinct pages, and a Warehouse-restricted user saw D but not C.
+`cleanup_stock_entry_item_filter.py` cancelled the entries and deleted the users and items;
+all test Bin rows are zero.
+
+The real browser was exercised on 8080 after a backend restart (hooks.py changes are cached in
+the Python worker): the Material Transfer dropdown listed only C's items with quantities and
+the filter description; keyboard ArrowDown/Enter selected `SP-SEF-X`; changing the row source
+to D produced the Persian warning and kept the row; with the row at D the dropdown showed only
+D's items; virtual A showed only V; no source showed the Persian prompt and an empty list;
+"Lamp" matched item names; a Material Transfer of 2 units submitted as `MAT-STE-2026-00119`
+and moved 5→3 in C and 0→2 in D, then cancelled back; Material Receipt still used ERPNext's
+unfiltered Item query.
+
+## 0.5.0 release preparation and SRBNB reconciliation (2026-10-22)
+
+`core/stock_search.filter_values` now validates the three documented Link filters. A present
+non-string value (`{"warehouse": ["=", "WH-001"]}`, an int, a dict) is refused with an empty
+list at the API boundary; missing keys and `None` mean "not sent", and ordinary string filters
+behave as before. Six database-free tests in `tests/test_stock_search.py` cover valid strings,
+missing keys, `None`, each malformed type, non-dict payloads and unknown keys. The full suite is
+**1,250 tests, OK (1 skipped)** under `.venv` with `openpyxl`; without `openpyxl` it is 1,250
+tests, OK with 11 skipped. `ruff check` and `ruff format --check` pass.
+
+Direct HTTP checks on 8080 after a safe backend restart: a malformed warehouse filter returned
+`200` and `{"message": []}`; a valid filter returned `200` and four rows. Guest and a
+Warehouse-restricted user still get no rows outside their permission.
+
+The 733,333.33 `Stock Received But Not Billed` balance in the unified purchase proof is fully
+reconstructed from the stored GL:
+
+- 100 units at 100,000: Purchase Invoice debits SRBNB 10,000,000; the 30- and 70-unit receipts
+  credit it back, leaving zero.
+- A 2,000,000 LCV on the 30-unit receipt reposts that receipt under its own voucher: stock
+  becomes 5,000,000, SRBNB is credited 3,000,000, and the freight expense is credited
+  2,000,000. SRBNB is still zero; valuation is 166,666.67 per unit.
+- The 5-unit Purchase Receipt Return debits SRBNB 833,333.33 (5 × 166,666.67).
+- The 1-unit financial Debit Note credits SRBNB 100,000 (invoice rate, no SLE).
+- Net: 733,333.33 debit, comprising 400,000 of invoice value for the four units physically
+  returned but not financially credited, plus 333,333.33 of landed cost on the five returned
+  units.
+
+Two controlled matched 5-of-5 return chains confirmed the rule: without LCV the SRBNB net is
+zero; with a 100,000 LCV on ten units it is 50,000 (five units × 10,000). The residual is
+standard ERPNext treatment of a landed cost that the supplier invoice never billed, not a
+duplicate posting. Clearing it requires a freight credit note or an LCV adjustment; the app
+does not force it to zero.
+
+Version `0.5.0` and its CHANGELOG/README entry are prepared for release but not committed. The
+release boundary audit found one cross-feature dependency: `integrity.py` imported
+`core.commitment.commitment_token`, and the working tree registered the paused Sales Invoice
+commitment lifecycle and Delivery Note commitment validation. That dependency is removed from
+the release candidate; the isolation is recorded below. The Item filter is independent of all of
+it; purchasing and virtual warehouses share the approved `integrity.py`.
+
+The final isolated release candidate, built from the approved files only, ran **1,220
+database-free tests, OK with 2 skipped** under `.venv` with `openpyxl` (12 skipped without it),
+and `ruff check` and `ruff format --check` passed over 104 files. It imported and registered only
+the approved hooks, and on 8080 it returned the warehouse-filtered Item rows, refused a virtual
+Delivery Note, and refused an unlinked managed Delivery Note with `DN_NOT_LINKED`. No document,
+Item or Bin row remained. The paused development tree is not part of that candidate.
+
+## Commitment isolation before 0.5.0 (2026-10-22)
+
+This section records the development-tree separation that made the release boundary possible.
+The release candidate contains none of the paused modules or tests named here.
+
+The cross-feature dependency was `integrity.py`'s module-level
+`from smartprocess_logistics.core.commitment import commitment_token`, used only by
+`_commitment_state` and `validate_delivery_note`. The approved purchase validators lived in the
+same module, so importing the purchase module imported the paused commitment rules even though
+it never called them.
+
+The separation is structural and behavior-preserving:
+
+- `core/integrity.py` owns the approved managed Delivery Note rule (I30):
+  `delivery_note_problems` plus the `delivery_identity_problems`, `delivery_source_problem` and
+  `delivery_second_deduction_problem` helpers. It imports no commitment code.
+- `core/commitment_delivery.py` owns the committed-warehouse half and composes it with those
+  helpers. A 900-case differential test against the pre-refactor function produced identical
+  problem codes, messages and rows.
+- `integrity.py` owns the approved `validate_delivery_note` and the shared invoice-context and
+  row builders; it imports no commitment module. `commitment_delivery.py` owns
+  `_commitment_state` and the combined validator, passing the commitment lookup into the shared
+  context.
+- `hooks_composition.py` registers the approved Delivery Note pair:
+  `integrity.validate_delivery_note` then `warehouse.sales.validate_delivery_note`. In the
+  development tree `hooks_commitment.py` replaces the first entry with the combined
+  `commitment_delivery.validate_delivery_note`, so the final list and order are unchanged.
+- `hooks_commitment.py` adds the committed-stock panel script, the two Sales Invoice lifecycle
+  handlers and the combined Delivery Note validator only when present.
+- The paused tests moved to `tests/test_commitment_delivery.py`; `tests/test_integrity.py` keeps
+  the approved I30 tests and the approved hook composition. `test_lifecycle` keeps the
+  development composition test, skipped when the extension is absent, and the approved test.
+
+Evidence:
+
+- `doctype_js` is identical to the baseline. The development `doc_events` has the same handlers
+  and order; the Delivery Note handler path is the combined validator because the function moved.
+- The 900-case differential test compared the combined function with the baseline for every
+  branch and random combinations: **identical**. The approved I30 function matched the baseline
+  on all 203 neutral-commitment cases.
+- The full development suite is **1,268 tests, OK (1 skipped)** under `.venv` with `openpyxl`;
+  without it, 1,268 tests, OK with 11 skipped. The 48 paused commitment tests pass explicitly.
+- The live I30 draft-Delivery-Note check refused an unlinked managed row with the Persian
+  `DN_NOT_LINKED` message through **both** `integrity.validate_delivery_note` and the
+  development hook; no document or Item remained.
+- A physical, non-managed draft Delivery Note (`SP-3B-PLAIN` in `مرکزی - SP`) was allowed by
+  the approved validator, inserted as a draft and deleted; no stock moved. The Product Bundle
+  proof again refused the virtual Delivery Note while the physical bundle invoice posted and was
+  cancelled; its Items were deleted and Bin rows are zero.
+- After a safe restart, the development site still registers the two Sales Invoice lifecycle
+  handlers, the combined Delivery Note validator, the committed-stock panel script and the
+  Stock Entry filter script. The Sales Invoice and Stock Entry form metas contain their scripts;
+  the Stock Entry Material Transfer query still resolves to the source warehouse.
+- In the browser, a disposable user loaded the Sales Invoice form with both serial scripts and
+  the committed-stock script in its meta, and the Stock Entry form with the filter script and a
+  Material Transfer query for `بختیار - SP`. The user was deleted after the check; no document
+  was saved.
+- The integration proofs were re-run after the separation: the Item filter proof, the unified
+  purchase proof (SRBNB 733,333.33, zero final stock) and the virtual physical sale proof (virtual
+  refusal, physical sale, cancellation). All check lines matched the previous audit, and their
+  disposable Items were removed with zero Bin rows.
+- A temporary release tree under `%TEMP%\sp-release-0.5.0` contained only the approved files,
+  with the paused modules and tests removed and the paused `authz`/CSS hunks stripped. It
+  imported with the bench Python without loading any commitment module, registered the approved
+  Delivery Note pair, returned `DN_NOT_LINKED` from the approved I30 rule, and ran **199**
+  approved database-free tests (1 skipped: the development composition test). The tree was then
+  removed.
+
+Version `0.5.0` and the CHANGELOG/README entries are prepared but not committed. The paused
+development tree remains intact.
+
+## I30 Delivery Note audit (2026-10-22)
+
+The pre-refactor `integrity.validate_delivery_note` was not one feature. Its conditions split
+into three groups:
+
+| Condition | Rule | Owner | Active in dev | In release |
+| --------- | ---- | ----- | ------------- | ---------- |
+| `managed` scope | any Delivery Note row, or linked invoice, names an Item with `sp_serial_required` | approved managed serial workflow | yes | yes |
+| `DN_NOT_LINKED`, `DN_DETAIL_MISSING`, `DN_INVOICE_MISSING`, `DN_DETAIL_NOT_FOUND` | a managed row must name its own invoice row | approved I30 | yes | yes |
+| `DN_CROSS_INVOICE`, `DN_ITEM_MISMATCH`, `DN_INVOICE_NOT_SUBMITTED` | the named row belongs to the invoice and matches it | approved I30 | yes | yes |
+| `DN_COMPANY_MISMATCH`, `DN_WAREHOUSE_COMPANY`, `DN_TARGET_WAREHOUSE_COMPANY` | invoice, source and target are the document's company | approved I30 | yes | yes |
+| `DN_SOURCE_WAREHOUSE_MISSING` | a stock row names a source warehouse | approved I30 (native ERPNext also requires it on submit) | yes | yes |
+| `DN_SECOND_DEDUCTION` | a managed invoice that already moved stock is not deducted again | approved I30 | yes | yes |
+| `DN_COMMITMENT_BROKEN`, `DN_COMMITMENT_TARGET_MISSING`, `DN_COMMITTED_WAREHOUSE` | the committed warehouse exists and is the source | paused Commitment (I36) | yes | no |
+| virtual source refusal | a virtual warehouse cannot be delivered from | approved `warehouse.sales` (I39) | yes | yes |
+
+The approved I30 rule is `core.integrity.delivery_note_problems`; `commitment_delivery.py`
+composes it with the commitment checks for the development tree. The approved composition
+registers `integrity.validate_delivery_note` then `warehouse.sales.validate_delivery_note`; the
+development extension replaces the first entry with the combined
+`commitment_delivery.validate_delivery_note`. Hook order and the final development list are
+unchanged.
+
+Evidence: 900 differential cases against the pre-refactor function matched exactly; the
+approved function matched all 203 neutral-commitment cases; the draft unlinked managed Delivery
+Note was refused by both validators with `DN_NOT_LINKED`; a non-managed physical draft was
+allowed, inserted and deleted; the virtual bundle Delivery Note was refused while the physical
+bundle invoice posted and was cancelled. No document or Item remains.

@@ -1,0 +1,77 @@
+"""The approved hook composition, independent of the paused committed-stock feature.
+
+`hooks.py` starts from these two functions. The development tree then loads
+`hooks_commitment.py`, which appends the paused committed-stock form script and registers the
+two Sales Invoice lifecycle handlers and the committed Delivery Note validator. The approved
+release subset excludes that module; the functions below stay importable and complete without
+it.
+
+Nothing here imports Frappe. The handler names are strings, exactly as `hooks.py` has always
+exported them, so the composition can be checked without a site.
+"""
+
+
+def approved_doctype_js():
+	"""The Desk form scripts that belong to the approved release."""
+	return {
+		# Both are inlined into the Sales Invoice form meta, in this order, and Frappe accepts a
+		# list here: `desk/form/meta.py::get_code_files_via_hooks` wraps a single path in a list
+		# and then reads each one. The development extension appends the committed-stock panel
+		# script; the approved release has only these two acts.
+		"Sales Invoice": [
+			"public/js/sales_invoice_serial_button.js",
+			"public/js/sales_invoice_serial_transfer.js",
+		],
+		# The two buttons that export this app's records and import them back. They live on the
+		# Settings single because that is where an administrator looks for them, and they are the
+		# only supported way to carry the history across a removal.
+		"Logistics Settings": "public/js/logistics_settings_transfer.js",
+		# One Link query for one purpose: in a Material Transfer, the Item Code selector offers
+		# the items that are actually in the row's source warehouse. It replaces the form's own
+		# `get_query` on that field and leaves every other purpose to the standard controller.
+		"Stock Entry": "public/js/stock_entry_item_stock_filter.js",
+	}
+
+
+def approved_doc_events():
+	"""The document guards and the virtual-warehouse policy of the approved release."""
+	return {
+		# The serial workflow's update-stock guard, plus the virtual-warehouse refusal. The
+		# development extension adds the two commitment lifecycle handlers to this dict.
+		"Sales Invoice": {
+			"validate": [
+				"smartprocess_logistics.integrity.validate_sales_invoice",
+				"smartprocess_logistics.warehouse.sales.validate_sales_invoice",
+			],
+		},
+		# The approved managed-row rule (I30) and the virtual-warehouse refusal. The development
+		# extension replaces the first entry with the combined committed-stock validator from
+		# `commitment_delivery.py`; the release keeps this approved pair.
+		"Delivery Note": {
+			"validate": [
+				"smartprocess_logistics.integrity.validate_delivery_note",
+				"smartprocess_logistics.warehouse.sales.validate_delivery_note",
+			],
+		},
+		"Purchase Invoice": {
+			"validate": "smartprocess_logistics.integrity.validate_purchase_invoice",
+		},
+		# Purchase owns the invoice-first guard and the quantity-based receipt rules. Every
+		# stock receipt row must link a submitted Purchase Invoice; the destination may be any
+		# permitted virtual or physical warehouse, and the standard Purchase Receipt posts it.
+		"Purchase Receipt": {
+			"validate": [
+				"smartprocess_logistics.integrity.validate_purchase_receipt",
+				"smartprocess_logistics.purchase.receipt.validate_purchase_receipt",
+			],
+		},
+		# A Stock Entry that touches a virtual warehouse must be a Material Transfer. Everything
+		# else about the movement is the standard controller's.
+		"Stock Entry": {
+			"validate": "smartprocess_logistics.warehouse.stock_entry.validate_stock_entry",
+		},
+		# Virtual stock is not sellable, so it cannot be reserved either.
+		"Stock Reservation Entry": {
+			"validate": "smartprocess_logistics.warehouse.sales.validate_stock_reservation_entry",
+		},
+	}
