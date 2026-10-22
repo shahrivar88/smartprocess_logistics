@@ -28,7 +28,9 @@ evaluation are not modelled. The framework's half of the contract was read from 
 """
 
 import importlib
+import importlib.util
 import pathlib
+import unittest
 from datetime import datetime, timedelta
 
 from smartprocess_logistics.core import authz
@@ -688,8 +690,11 @@ class SourceRuleTest(UnitTestCase):
 		self.assertNotIn("def before_uninstall(", source("smartprocess_logistics/install.py"))
 
 
+HAS_COMMITMENT_COMPOSITION = importlib.util.find_spec("smartprocess_logistics.hooks_commitment") is not None
+
+
 class HooksRegistrationTest(UnitTestCase):
-	"""`hooks.py` imports nothing, so it can be read on a machine with no bench."""
+	"""`hooks.py` imports only the pure composition module, so it needs no bench."""
 
 	def hooks(self):
 		return importlib.import_module("smartprocess_logistics.hooks")
@@ -727,9 +732,78 @@ class HooksRegistrationTest(UnitTestCase):
 	def test_no_doctype_class_or_whitelisted_method_is_overridden(self):
 		hooks = self.hooks()
 
-		for attribute in ("override_doctype_class", "override_whitelisted_methods", "doc_events"):
+		for attribute in ("override_doctype_class", "override_whitelisted_methods"):
 			with self.subTest(attribute=attribute):
 				self.assertFalse(hasattr(hooks, attribute))
+
+	@unittest.skipUnless(
+		HAS_COMMITMENT_COMPOSITION,
+		"the development commitment composition is not part of this build",
+	)
+	def test_doc_events_are_the_guards_and_the_managed_lifecycle(self):
+		"""The validation handlers guard; the two Sales Invoice events are the commitment.
+
+		`tests/test_integrity.py` owns the rules; this test owns the registration shape. Every
+		other document may register `validate` and nothing else. The Sales Invoice's two lifecycle
+		events are the one place this app writes an ERPNext document, and they are named here so a
+		new hook cannot arrive unnoticed. The approved release subset has no
+		`hooks_commitment.py`, so this test is skipped there and the approved composition test
+		below is the one that runs.
+		"""
+		doc_events = getattr(self.hooks(), "doc_events", {})
+
+		self.assertEqual(
+			set(doc_events),
+			{
+				"Sales Invoice",
+				"Delivery Note",
+				"Purchase Invoice",
+				"Purchase Receipt",
+				"Stock Entry",
+				"Stock Reservation Entry",
+			},
+		)
+		self.assertEqual(
+			set(doc_events["Sales Invoice"]),
+			{"validate", "before_submit", "before_cancel"},
+		)
+		for doctype in (
+			"Delivery Note",
+			"Purchase Invoice",
+			"Purchase Receipt",
+			"Stock Entry",
+			"Stock Reservation Entry",
+		):
+			with self.subTest(doctype=doctype):
+				self.assertEqual(set(doc_events[doctype]), {"validate"})
+
+	def test_the_approved_composition_has_no_paused_hooks(self):
+		"""The release composition is importable and complete without the commitment module."""
+		from smartprocess_logistics import hooks_composition
+
+		doc_events = hooks_composition.approved_doc_events()
+		doctype_js = hooks_composition.approved_doctype_js()
+
+		self.assertEqual(set(doc_events["Sales Invoice"]), {"validate"})
+		self.assertEqual(
+			doc_events["Delivery Note"]["validate"],
+			[
+				"smartprocess_logistics.integrity.validate_delivery_note",
+				"smartprocess_logistics.warehouse.sales.validate_delivery_note",
+			],
+		)
+		self.assertNotIn("public/js/sales_invoice_committed_stock.js", doctype_js["Sales Invoice"])
+		self.assertEqual(
+			set(doc_events),
+			{
+				"Sales Invoice",
+				"Delivery Note",
+				"Purchase Invoice",
+				"Purchase Receipt",
+				"Stock Entry",
+				"Stock Reservation Entry",
+			},
+		)
 
 	def test_the_app_requires_frappe_and_erpnext(self):
 		self.assertEqual(self.hooks().required_apps, ["frappe", "erpnext"])

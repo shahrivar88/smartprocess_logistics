@@ -5,6 +5,101 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 — 2026-10-22
+
+**Purchasing, virtual warehouses, standard Material Transfer, and the source-warehouse Item
+selector.** This release covers the invoice-first purchase workflow and the warehouse
+classification built on ERPNext's standard `Warehouse Type`. It does **not** include the paused
+Sales Invoice committed-stock UI or any change to sales fulfilment; that work remains unshipped
+and uncommitted. Nothing here is tagged or published by this file.
+
+Verified on `SmartProcessERP` (Frappe v16, ERPNext 16.35.0, port 8080) with the database-free
+suite and the integration proofs named in `docs/test-manifest.md`. The release candidate suite
+runs **1,220 tests, OK (2 skipped)** under `.venv` with `openpyxl` — the missing-library path and
+the development-composition test — and 1,220 tests, OK with 12 skipped without `openpyxl` (the
+XLSX reader tests plus the development-composition test). The paused development tree is not
+part of this release.
+
+### Added
+
+- **The Stock Entry Item Code selector can be limited to the source warehouse.** In a
+  `Material Transfer`, the standard Link offers only items with a positive `Bin.actual_qty` in
+  the row's `s_warehouse`, else the document's `from_warehouse`, and shows the quantity beside
+  the item (`Stock: 120 Nos`). The link keeps Frappe's search, keyboard navigation and paging.
+  No source warehouse shows a Persian prompt and an empty list rather than an unfiltered one.
+  Changing the source after choosing an item warns in Persian and leaves the row and its
+  quantity untouched.
+- **A permission-aware, read-only Link query.** `warehouse.item_search.items_in_stock` refuses a
+  missing, group, wrong-company or unreadable warehouse, requires Item read, and applies
+  `get_match_cond("Item")` (role permissions, Item user permissions, `if_owner` and the site's
+  permission-query hooks) to the `Item`/`Bin` statement. It writes nothing and does not replace
+  the standard submit-time validations.
+- **Invoice-first purchasing.** Every domestic and foreign stock Purchase Invoice bills with
+  `update_stock = 0`; stock is received only by a Purchase Receipt. A stock receipt row must link
+  a submitted Purchase Invoice and match its company, supplier, item, row, UOM and conversion
+  factor. Partial and multiple receipts against one invoice remain standard.
+- **Virtual and physical warehouses from the standard `Warehouse Type`.** A warehouse whose type
+  is `Virtual`, `مجازی` or `Transit` (or a site override in `sp_virtual_warehouse_types`) is
+  virtual. Its stock is real inventory and part of company assets, but it is not sellable,
+  deliverable or reservable. Movement in all four directions uses the standard Stock Entry
+  **Material Transfer**; a non-transfer purpose touching a virtual warehouse is refused.
+- **Financial-only purchase returns.** A Purchase Invoice Return/Debit Note may post with
+  `update_stock = 0`; a stock-affecting PI return is refused and stock returns use the standard
+  Purchase Receipt Return.
+
+### Changed
+
+- The Stock Entry `item_code` query is replaced only for `Material Transfer`; every other purpose
+  keeps ERPNext's own `erpnext.queries.item({is_stock_item: 1})`.
+- A linked stock Purchase Receipt now applies the invoice-row checks to every row, not only rows
+  whose item is marked `sp_serial_required`.
+- The release hook composition contains only the approved form scripts and validation handlers.
+  The paused committed-stock feature is not included: no commitment module is imported or
+  registered by this release.
+- The approved managed Delivery Note rule (I30) remains in the release: a managed row must name
+  its own submitted invoice row, item, company and warehouse company; a stock row names a source;
+  and an invoice that already moved stock is not deducted twice. The committed-warehouse checks
+  (I36) are not part of this release. The release runs the approved rule plus the
+  virtual-warehouse refusal.
+
+### Fixed
+
+- **Malformed Link filters return an empty list instead of a server error.** A direct caller
+  sending a non-string `warehouse`, `company` or `item_code` (for example
+  `{"warehouse": ["=", "WH-001"]}`) is refused at the boundary; normal Link searches are
+  unchanged.
+- A Product Bundle cannot ship its components from a virtual warehouse through `packed_items`;
+  the same bundle sold from a physical warehouse is unaffected.
+- Purchase Receipt rows can no longer name a supplier, company, item or invoice row that differs
+  from the linked Purchase Invoice, and a UOM/conversion-factor mismatch is refused.
+
+### Known limitations
+
+- The Item selector is a search convenience. The server filters suggestions; the standard
+  Purchase/Stock controllers still decide quantity, negative stock, valuation and permissions at
+  submit.
+- Items with zero or negative stock in the source warehouse are not offered, and manually typing
+  such an item into the Link is refused by standard Link validation. A row selected earlier is
+  never silently cleared when the source warehouse changes.
+- Group and wrong-company warehouses produce no suggestions. Disabled warehouses follow standard
+  ERPNext behaviour: the Stock Entry warehouse Link filters company and non-group, and an
+  existing disabled value is left to the standard document lifecycle.
+- The query returns at most 500 rows per request and formats quantities to three decimals.
+- Landed Cost Voucher plus a partial Purchase Receipt Return can leave a residual
+  `Stock Received But Not Billed` balance: the physical return is valued at the LCV-adjusted
+  rate while a financial Debit Note credits the invoice rate. This is standard ERPNext
+  behaviour, not a duplicate posting. A fully matched physical and financial return clears the
+  invoice portion; the remaining LCV portion needs a freight credit note or an LCV adjustment.
+- Large-catalog behaviour was checked by query shape, indexes and paging; it was not benchmarked
+  against a production-scale Item master.
+
+### Compatibility
+
+- Frappe v16 and ERPNext 16.35.0; no files in `frappe` or `erpnext` are modified.
+- No schema change, custom field or migration is required by the Item filter. The purchase and
+  warehouse guards use standard DocTypes and `doc_events`.
+- The paused Sales Invoice committed-stock UI is not part of this release.
+
 ## 0.4.0 — 2026-10-15
 
 **The release candidate: run against a real site, not installed on `SmartProcessERP` and not
