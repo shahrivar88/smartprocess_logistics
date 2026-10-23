@@ -1,0 +1,203 @@
+{
+ "app": "smartprocess_logistics",
+ "charts": [],
+ "content": "[{\"id\":\"sp_warehouse_header\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><a href=\\\"/app/warehouse-and-purchasing\\\">انبار و خرید</a></span>\",\"col\":12}},{\"id\":\"sp_warehouse_para\",\"type\":\"paragraph\",\"data\":{\"text\":\"موجودی فیزیکی و مجازی، تقاضای سفارش فروش و نیاز خرید در یک نما.\",\"col\":12}},{\"id\":\"sp_warehouse_card_reports\",\"type\":\"card\",\"data\":{\"card_name\":\"گزارش‌ها\",\"col\":4}},{\"id\":\"sp_warehouse_card_buying\",\"type\":\"card\",\"data\":{\"card_name\":\"خرید\",\"col\":4}},{\"id\":\"sp_warehouse_card_stock\",\"type\":\"card\",\"data\":{\"card_name\":\"انبار\",\"col\":4}},{\"id\":\"sp_warehouse_card_sales\",\"type\":\"card\",\"data\":{\"card_name\":\"فروش\",\"col\":4}}]",
+ "creation": "2026-10-23 10:00:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "stock",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "انبار و خرید",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "گزارش‌ها",
+   "link_count": 5,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "موجودی انبار",
+   "link_count": 0,
+   "link_to": "Warehouse Inventory",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "داشبورد موجودی و خرید",
+   "link_count": 0,
+   "link_to": "Inventory and Procurement Dashboard",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "سفارش‌های آمادهٔ فاکتور",
+   "link_count": 0,
+   "link_to": "Sales Orders Ready for Invoicing",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "کسری خرید",
+   "link_count": 0,
+   "link_to": "Procurement Shortage",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "وزن و حجم کالا",
+   "link_count": 0,
+   "link_to": "Item Weight and Volume",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "خرید",
+   "link_count": 3,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "سفارش خرید",
+   "link_count": 0,
+   "link_to": "Purchase Order",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "رسید خرید",
+   "link_count": 0,
+   "link_to": "Purchase Receipt",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "فاکتور خرید",
+   "link_count": 0,
+   "link_to": "Purchase Invoice",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "انبار",
+   "link_count": 3,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "کالا",
+   "link_count": 0,
+   "link_to": "Item",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "انبار",
+   "link_count": 0,
+   "link_to": "Warehouse",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "انتقال مواد",
+   "link_count": 0,
+   "link_to": "Stock Entry",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "فروش",
+   "link_count": 2,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "سفارش فروش",
+   "link_count": 0,
+   "link_to": "Sales Order",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "فاکتور فروش",
+   "link_count": 0,
+   "link_to": "Sales Invoice",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-10-23 16:05:00.000000",
+ "modified_by": "Administrator",
+ "module": null,
+ "name": "Warehouse and Purchasing",
+ "number_cards": [],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [
+   {"role": "Stock User"},
+   {"role": "Purchase User"},
+   {"role": "Sales User"},
+   {"role": "System Manager"}
+  ],
+ "sequence_id": 31.0,
+ "shortcuts": [],
+ "title": "انبار و خرید",
+ "type": "Workspace"
+}

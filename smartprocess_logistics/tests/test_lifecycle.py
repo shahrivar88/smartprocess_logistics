@@ -757,6 +757,8 @@ class HooksRegistrationTest(UnitTestCase):
 			{
 				"Sales Invoice",
 				"Delivery Note",
+				"Item",
+				"Purchase Order",
 				"Purchase Invoice",
 				"Purchase Receipt",
 				"Stock Entry",
@@ -767,15 +769,12 @@ class HooksRegistrationTest(UnitTestCase):
 			set(doc_events["Sales Invoice"]),
 			{"validate", "before_submit", "before_cancel"},
 		)
-		for doctype in (
-			"Delivery Note",
-			"Purchase Invoice",
-			"Purchase Receipt",
-			"Stock Entry",
-			"Stock Reservation Entry",
-		):
+		for doctype in ("Delivery Note", "Stock Entry", "Stock Reservation Entry"):
 			with self.subTest(doctype=doctype):
 				self.assertEqual(set(doc_events[doctype]), {"validate"})
+		for doctype in ("Purchase Order", "Purchase Invoice", "Purchase Receipt"):
+			with self.subTest(doctype=doctype):
+				self.assertIn("before_submit", doc_events[doctype])
 
 	def test_the_approved_composition_has_no_paused_hooks(self):
 		"""The release composition is importable and complete without the commitment module."""
@@ -798,6 +797,8 @@ class HooksRegistrationTest(UnitTestCase):
 			{
 				"Sales Invoice",
 				"Delivery Note",
+				"Item",
+				"Purchase Order",
 				"Purchase Invoice",
 				"Purchase Receipt",
 				"Stock Entry",

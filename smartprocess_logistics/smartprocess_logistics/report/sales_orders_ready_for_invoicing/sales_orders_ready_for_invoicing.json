@@ -1,0 +1,24 @@
+{
+ "add_total_row": 0,
+ "creation": "2026-10-23 10:00:00.000000",
+ "disabled": 0,
+ "docstatus": 0,
+ "doctype": "Report",
+ "idx": 0,
+ "is_standard": "Yes",
+ "modified": "2026-10-23 13:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "SmartProcess Logistics",
+ "name": "Sales Orders Ready for Invoicing",
+ "owner": "Administrator",
+ "prepared_report": 0,
+ "ref_doctype": "Sales Order",
+ "report_name": "Sales Orders Ready for Invoicing",
+ "report_type": "Script Report",
+ "roles": [
+  {"role": "Sales User"},
+  {"role": "Accounts User"},
+  {"role": "Accounts Manager"},
+  {"role": "Stock User"}
+ ]
+}

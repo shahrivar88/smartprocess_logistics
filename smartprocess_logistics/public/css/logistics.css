@@ -590,3 +590,52 @@
 	margin-bottom: 12px;
 	padding: 10px 12px;
 }
+
+/* The three stock figures above the invoice's items. Quiet by design: one line of title, one
+ * table, and a warning that appears only when the Bin value disagrees with the stock ledger. */
+.sp-committed-panel {
+	background: var(--control-bg, #f5f7fa);
+	border: 1px solid var(--border-color, #d1d8dd);
+	border-radius: var(--border-radius);
+	margin-bottom: 10px;
+	padding: 8px 10px;
+}
+
+.sp-committed-title {
+	font-weight: 600;
+	margin-bottom: 6px;
+}
+
+.sp-committed-body {
+	overflow-x: auto;
+}
+
+.sp-committed-table {
+	border-collapse: collapse;
+	font-size: var(--text-sm, 12px);
+	width: 100%;
+}
+
+.sp-committed-table th,
+.sp-committed-table td {
+	border-bottom: 1px solid var(--border-color, #d1d8dd);
+	padding: 4px 8px;
+	text-align: start;
+	white-space: nowrap;
+}
+
+.sp-committed-table th {
+	color: var(--text-muted);
+	font-weight: 500;
+}
+
+.sp-committed-number {
+	font-variant-numeric: tabular-nums;
+}
+
+.sp-committed-warning {
+	color: var(--red-600, #c0392b);
+	font-size: var(--text-xs, 11px);
+	margin-top: 4px;
+	white-space: normal;
+}

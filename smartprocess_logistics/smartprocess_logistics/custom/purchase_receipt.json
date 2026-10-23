@@ -1,0 +1,19 @@
+{
+ "custom_fields": [
+  {
+   "description": "شناسهٔ اختیاری بار برای گروه‌بندی چند رسید خرید؛ ردیابی per-cargo موجودی را تضمین نمی‌کند.",
+   "dt": "Purchase Receipt",
+   "fieldname": "sp_cargo_ref",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "insert_after": "supplier_delivery_note",
+   "label": "شناسه بار",
+   "module": "SmartProcess Logistics"
+  }
+ ],
+ "custom_perms": [],
+ "doctype": "Purchase Receipt",
+ "links": [],
+ "property_setters": [],
+ "sync_on_migrate": 1
+}

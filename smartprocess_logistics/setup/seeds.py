@@ -40,6 +40,7 @@ from smartprocess_logistics.core.defaults import (
 	DEFAULT_NEXT_ROW_COMMAND,
 )
 from smartprocess_logistics.core.normalization import NORMALIZATION_VERSION
+from smartprocess_logistics.core.policies import DEFAULT_POLICY
 
 SETTINGS_DOCTYPE = "Logistics Settings"
 
@@ -100,6 +101,34 @@ def sync_next_row_command():
 		return False
 
 	settings.next_row_command = DEFAULT_NEXT_ROW_COMMAND
+	settings.save()
+
+	return True
+
+
+def sync_inventory_policy_defaults():
+	"""Write the approved inventory defaults once into an existing Settings row.
+
+	A new Check column arrives as 0 for an old row, which is indistinguishable from an
+	administrator's explicit off. The version marker is written with the defaults, so the next
+	migrate leaves an explicit 0 alone. A fake or pre-migration Settings object without the
+	marker returns without writing.
+	"""
+	settings = frappe.get_single(SETTINGS_DOCTYPE)
+
+	if not hasattr(settings, "sp_inventory_policy_version"):
+		return False
+	if int(settings.get("sp_inventory_policy_version") or 0) >= 1:
+		return False
+
+	settings.sp_allocation_priority = DEFAULT_POLICY.allocation_priority
+	settings.sp_virtual_stock_covers_procurement = (
+		1 if DEFAULT_POLICY.virtual_stock_covers_procurement else 0
+	)
+	settings.sp_recommended_purchase_net_of_open_po = (
+		1 if DEFAULT_POLICY.recommended_purchase_net_of_open_po else 0
+	)
+	settings.sp_inventory_policy_version = 1
 	settings.save()
 
 	return True

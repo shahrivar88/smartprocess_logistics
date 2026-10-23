@@ -10,6 +10,86 @@
    "insert_after": "has_serial_no",
    "label": "نیازمند شماره سریال",
    "module": "SmartProcess Logistics"
+  },
+  {
+   "description": "وزن ناخالص یک واحد انباری؛ واحد آن همان Weight UOM استاندارد کالاست.",
+   "dt": "Item",
+   "fieldname": "sp_gross_weight",
+   "fieldtype": "Float",
+   "insert_after": "weight_uom",
+   "label": "وزن ناخالص",
+   "module": "SmartProcess Logistics",
+   "non_negative": 1
+  },
+  {
+   "default": "0",
+   "description": "اگر وزن ناخالص را آگاهانه ثبت کرده‌اید، حتی اگر صفر باشد، این را روشن کنید. مقدار مثبت خودکار علامت می‌خورد.",
+   "dt": "Item",
+   "fieldname": "sp_gross_weight_entered",
+   "fieldtype": "Check",
+   "insert_after": "sp_gross_weight",
+   "label": "وزن ناخالص ثبت شد",
+   "module": "SmartProcess Logistics"
+  },
+  {
+   "description": "طول یک واحد انباری بر حسب سانتی‌متر.",
+   "dt": "Item",
+   "fieldname": "sp_length_cm",
+   "fieldtype": "Float",
+   "insert_after": "sp_gross_weight",
+   "label": "طول (سانتی‌متر)",
+   "module": "SmartProcess Logistics",
+   "non_negative": 1
+  },
+  {
+   "default": "0",
+   "description": "اگر طول را آگاهانه ثبت کرده‌اید، حتی اگر صفر باشد، این را روشن کنید. مقدار مثبت خودکار علامت می‌خورد.",
+   "dt": "Item",
+   "fieldname": "sp_length_cm_entered",
+   "fieldtype": "Check",
+   "insert_after": "sp_length_cm",
+   "label": "طول ثبت شد",
+   "module": "SmartProcess Logistics"
+  },
+  {
+   "description": "عرض یک واحد انباری بر حسب سانتی‌متر.",
+   "dt": "Item",
+   "fieldname": "sp_width_cm",
+   "fieldtype": "Float",
+   "insert_after": "sp_length_cm",
+   "label": "عرض (سانتی‌متر)",
+   "module": "SmartProcess Logistics",
+   "non_negative": 1
+  },
+  {
+   "default": "0",
+   "description": "اگر عرض را آگاهانه ثبت کرده‌اید، حتی اگر صفر باشد، این را روشن کنید. مقدار مثبت خودکار علامت می‌خورد.",
+   "dt": "Item",
+   "fieldname": "sp_width_cm_entered",
+   "fieldtype": "Check",
+   "insert_after": "sp_width_cm",
+   "label": "عرض ثبت شد",
+   "module": "SmartProcess Logistics"
+  },
+  {
+   "description": "ارتفاع یک واحد انباری بر حسب سانتی‌متر.",
+   "dt": "Item",
+   "fieldname": "sp_height_cm",
+   "fieldtype": "Float",
+   "insert_after": "sp_width_cm",
+   "label": "ارتفاع (سانتی‌متر)",
+   "module": "SmartProcess Logistics",
+   "non_negative": 1
+  },
+  {
+   "default": "0",
+   "description": "اگر ارتفاع را آگاهانه ثبت کرده‌اید، حتی اگر صفر باشد، این را روشن کنید. مقدار مثبت خودکار علامت می‌خورد.",
+   "dt": "Item",
+   "fieldname": "sp_height_cm_entered",
+   "fieldtype": "Check",
+   "insert_after": "sp_height_cm",
+   "label": "ارتفاع ثبت شد",
+   "module": "SmartProcess Logistics"
   }
  ],
  "custom_perms": [],

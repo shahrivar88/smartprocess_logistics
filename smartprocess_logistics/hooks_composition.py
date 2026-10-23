@@ -21,7 +21,11 @@ def approved_doctype_js():
 		"Sales Invoice": [
 			"public/js/sales_invoice_serial_button.js",
 			"public/js/sales_invoice_serial_transfer.js",
+			"public/js/sales_invoice_warehouse_stock.js",
 		],
+		# Stock-aware Item suggestions and the read-only billing-progress panel. The panel
+		# reads standard Sales Invoice links; it never creates or submits an invoice.
+		"Sales Order": "public/js/sales_order_stock_visibility.js",
 		# The two buttons that export this app's records and import them back. They live on the
 		# Settings single because that is where an administrator looks for them, and they are the
 		# only supported way to carry the history across a removal.
@@ -53,8 +57,19 @@ def approved_doc_events():
 				"smartprocess_logistics.warehouse.sales.validate_delivery_note",
 			],
 		},
+		# Positive measurements are marked as entered on the Item; the visible per-field
+		# checks are how an explicit zero is distinguished from a field never filled.
+		"Item": {
+			"validate": "smartprocess_logistics.measurements.validate_item_measurements",
+		},
+		# Gross weight and dimensions are frozen on the submitted purchase row; native net
+		# weight is already snapshotted by ERPNext. The handler only fills empty rows.
+		"Purchase Order": {
+			"before_submit": "smartprocess_logistics.measurements.snapshot_purchase_document",
+		},
 		"Purchase Invoice": {
 			"validate": "smartprocess_logistics.integrity.validate_purchase_invoice",
+			"before_submit": "smartprocess_logistics.measurements.snapshot_purchase_document",
 		},
 		# Purchase owns the invoice-first guard and the quantity-based receipt rules. Every
 		# stock receipt row must link a submitted Purchase Invoice; the destination may be any
@@ -64,6 +79,7 @@ def approved_doc_events():
 				"smartprocess_logistics.integrity.validate_purchase_receipt",
 				"smartprocess_logistics.purchase.receipt.validate_purchase_receipt",
 			],
+			"before_submit": "smartprocess_logistics.measurements.snapshot_purchase_document",
 		},
 		# A Stock Entry that touches a virtual warehouse must be a Material Transfer. Everything
 		# else about the movement is the standard controller's.

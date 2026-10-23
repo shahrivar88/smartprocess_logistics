@@ -80,15 +80,18 @@ def module_name():
 
 
 class TestWorkspaceSidebar(UnitTestCase):
-	def test_exactly_one_sidebar_carries_the_navigation(self):
+	def test_each_workspace_sidebar_carries_its_own_navigation(self):
 		carrying = [
 			(doc["name"], [item for item in doc["items"] if item.get("type") != "Section Break"])
 			for _path, doc in sidebars()
 			if any(item.get("type") != "Section Break" for item in doc.get("items") or [])
 		]
 
-		self.assertEqual(len(carrying), 1, f"expected one sidebar with links, found {carrying}")
-		self.assertEqual(len(carrying[0][1]), 6)
+		self.assertEqual(len(carrying), 2, f"expected the two workspace sidebars, found {carrying}")
+		self.assertEqual(carrying[0][0], "انبار و خرید")
+		self.assertEqual(len(carrying[0][1]), 14)
+		self.assertEqual(carrying[1][0], "سریال لجستیک")
+		self.assertEqual(len(carrying[1][1]), 6)
 
 	def test_the_sidebar_that_carries_them_is_named_in_persian(self):
 		for _path, doc in sidebars():
@@ -121,6 +124,20 @@ class TestWorkspaceSidebar(UnitTestCase):
 			"Logistics Settings",
 			"Missing Sales Serials",
 			"Logistics",
+			"Warehouse and Purchasing",
+			"Warehouse Inventory",
+			"Inventory and Procurement Dashboard",
+			"Sales Orders Ready for Invoicing",
+			"Procurement Shortage",
+			"Item Weight and Volume",
+			"Purchase Order",
+			"Purchase Receipt",
+			"Purchase Invoice",
+			"Item",
+			"Warehouse",
+			"Stock Entry",
+			"Sales Order",
+			"Sales Invoice",
 		}
 
 		found = {
@@ -195,16 +212,16 @@ class TestTheAppLevelFilesAreNamedAfterTheirDocuments(UnitTestCase):
 					self.assertEqual(path.stem, self.scrub(name), f"migrate would delete {name!r}")
 					seen += 1
 
-		self.assertEqual(seen, 3, "the three files this app ships: two sidebars and one icon")
+		self.assertEqual(seen, 4, "the four files this app ships: three sidebars and one icon")
 
 
 class TestWorkspace(UnitTestCase):
-	def workspace(self):
+	def workspace(self, name="Logistics"):
 		paths = sorted(WORKSPACE_DIR.glob("*/*.json"))
-		self.assertEqual(len(paths), 1)
-		path = paths[0]
+		found = [(path, read_json(path)) for path in paths if read_json(path).get("name") == name]
+		self.assertEqual(len(found), 1, f"expected exactly one workspace named {name!r}")
 
-		return path, read_json(path)
+		return found[0]
 
 	def test_the_cards_the_content_names_are_the_cards_the_links_define(self):
 		_path, doc = self.workspace()
@@ -241,12 +258,49 @@ class TestWorkspace(UnitTestCase):
 		self.assertTrue(any(ord(character) > 127 for character in doc["title"]))
 
 
-class TestReport(UnitTestCase):
-	def report_files(self):
-		paths = sorted(REPORT_DIR.glob("*/*.json"))
-		self.assertEqual(len(paths), 1, "expected exactly one report")
+class TestWarehouseWorkspace(TestWorkspace):
+	def workspace(self, name="Warehouse and Purchasing"):
+		return super().workspace(name)
 
-		return paths[0], read_json(paths[0])
+	def test_it_links_the_five_approved_reports(self):
+		_path, doc = self.workspace()
+
+		reports = {link["link_to"] for link in doc["links"] if link.get("link_type") == "Report"}
+
+		self.assertEqual(
+			reports,
+			{
+				"Warehouse Inventory",
+				"Inventory and Procurement Dashboard",
+				"Sales Orders Ready for Invoicing",
+				"Procurement Shortage",
+				"Item Weight and Volume",
+			},
+		)
+
+
+class TestReport(UnitTestCase):
+	def report_files(self, name="Missing Sales Serials"):
+		paths = sorted(REPORT_DIR.glob("*/*.json"))
+		found = [(path, read_json(path)) for path in paths if read_json(path).get("name") == name]
+		self.assertEqual(len(found), 1, f"expected exactly one report named {name!r}")
+
+		return found[0]
+
+	def all_reports(self):
+		return [(path, read_json(path)) for path in sorted(REPORT_DIR.glob("*/*.json"))]
+
+	def test_every_report_is_a_standard_script_report(self):
+		for path, doc in self.all_reports():
+			with self.subTest(report=doc.get("name")):
+				self.assertEqual(doc["is_standard"], "Yes")
+				self.assertEqual(doc["report_type"], "Script Report")
+				self.assertTrue(doc.get("roles"))
+				slug = doc["name"].replace(" ", "_").lower()
+				self.assertEqual(path.parent.name, slug)
+				self.assertEqual(path.stem, slug)
+				self.assertTrue((path.parent / f"{slug}.py").exists())
+				self.assertTrue((path.parent / f"{slug}.js").exists())
 
 	def test_the_folder_and_the_files_are_named_after_the_report(self):
 		path, doc = self.report_files()

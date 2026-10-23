@@ -51,6 +51,9 @@ LEVEL_BY_ROLE = {
 ENDPOINT_LEVELS = {
 	"get_invoice_serial_status": VIEWER,
 	"get_serial_assignments": VIEWER,
+	# The three quantities on the invoice panel: a read, scoped by the caller's companies and
+	# by the framework's read permission on the item, warehouse and company.
+	"get_sellable_stock": VIEWER,
 	"set_row_serials": EDITOR,
 	# One serial, added to one row. The scan station calls this once per label; it is the same
 	# level as typing a row's whole set, because it is the same act performed one label at a time.

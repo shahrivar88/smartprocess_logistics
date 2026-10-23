@@ -32,7 +32,14 @@
   "report_section",
   "default_page_length",
   "report_column",
-  "max_page_length"
+  "max_page_length",
+  "inventory_tab",
+  "inventory_section",
+  "sp_allocation_priority",
+  "inventory_column",
+  "sp_virtual_stock_covers_procurement",
+  "sp_recommended_purchase_net_of_open_po",
+  "sp_inventory_policy_version"
  ],
  "fields": [
   {
@@ -202,6 +209,52 @@
    "fieldtype": "Int",
    "label": "حداکثر تعداد ردیف صفحه",
    "non_negative": 1
+  },
+  {
+   "fieldname": "inventory_tab",
+   "fieldtype": "Tab Break",
+   "label": "خرید و موجودی"
+  },
+  {
+   "fieldname": "inventory_section",
+   "fieldtype": "Section Break",
+   "label": "سیاست تخصیص و تأمین"
+  },
+  {
+   "default": "order_then_delivery",
+   "description": "ترتیب تخصیص موجودی فیزیکی به سفارش‌های فروش: قدیمی‌ترین سفارش، نزدیک‌ترین تاریخ تحویل، یا تاریخ سفارش و سپس تاریخ تحویل. تغییر آن از گزارش بعدی اعمال می‌شود.",
+   "fieldname": "sp_allocation_priority",
+   "fieldtype": "Select",
+   "label": "اولویت تخصیص موجودی",
+   "options": "oldest_order\nearliest_delivery\norder_then_delivery"
+  },
+  {
+   "fieldname": "inventory_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، موجودی مجازی/در راه در محاسبهٔ کسری تأمین به‌عنوان پوشش لحاظ می‌شود. مقدار ذخیره‌شدهٔ صفر به‌عنوان خاموش حفظ می‌شود.",
+   "fieldname": "sp_virtual_stock_covers_procurement",
+   "fieldtype": "Check",
+   "label": "موجودی مجازی پوشش تأمین است"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، سفارش‌های خرید باز از مقدار پیشنهادی خرید کسر می‌شوند؛ در غیر این صورت جداگانه نمایش داده می‌شوند.",
+   "fieldname": "sp_recommended_purchase_net_of_open_po",
+   "fieldtype": "Check",
+   "label": "کسر سفارش خرید باز از پیشنهاد خرید"
+  },
+  {
+   "default": "0",
+   "description": "نشانگر داخلی برای اینکه defaultهای این بخش یک‌بار روی ردیف‌های قدیمی نوشته شوند؛ مقدار ۱ یعنی مقدارهای صریح مدیر دیگر بازنویسی نمی‌شوند.",
+   "fieldname": "sp_inventory_policy_version",
+   "fieldtype": "Int",
+   "hidden": 1,
+   "label": "نسخهٔ سیاست خرید و موجودی",
+   "non_negative": 1,
+   "read_only": 1
   }
  ],
  "issingle": 1,

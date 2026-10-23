@@ -563,11 +563,17 @@ class TestHooksAreRegisteredAndSafe(UnitTestCase):
 			{
 				"Sales Invoice",
 				"Delivery Note",
+				"Item",
+				"Purchase Order",
 				"Purchase Invoice",
 				"Purchase Receipt",
 				"Stock Entry",
 				"Stock Reservation Entry",
 			},
+		)
+		self.assertEqual(
+			doc_events["Item"],
+			{"validate": "smartprocess_logistics.measurements.validate_item_measurements"},
 		)
 
 		self.assertEqual(
@@ -605,6 +611,12 @@ class TestHooksAreRegisteredAndSafe(UnitTestCase):
 			doc_events["Purchase Invoice"]["validate"],
 			"smartprocess_logistics.integrity.validate_purchase_invoice",
 		)
+		for doctype in ("Purchase Order", "Purchase Invoice", "Purchase Receipt"):
+			with self.subTest(doctype=doctype):
+				self.assertEqual(
+					doc_events[doctype]["before_submit"],
+					"smartprocess_logistics.measurements.snapshot_purchase_document",
+				)
 
 	def test_the_handler_never_ignores_permissions_or_writes_sql(self):
 		source = (APP_ROOT / "integrity.py").read_text(encoding="utf-8")

@@ -254,8 +254,8 @@ def delivery_note_problems(company, is_return, rows, managed):
 	This is the half of the original validator that does not read a commitment: every managed
 	row names its own submitted invoice row, item, company and warehouse company; a stock row
 	names a source; and a managed invoice that already moved stock is not deducted twice. The
-	committed-warehouse checks are not part of this release and are added only by the
-	development-only extension.
+	committed-warehouse checks live in `core.commitment_delivery` and are added only by the
+	development composition.
 	"""
 	if not managed or is_return:
 		return ()

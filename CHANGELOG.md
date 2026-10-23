@@ -5,6 +5,52 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1 — 2026-10-24
+
+**GitHub publication of the production-approved 0.5.0 functionality.** The application source in
+this release is the tree deployed and verified on `SmartProcessERP`. This release adds version
+metadata and release documentation. It does not change the deployed application.
+
+### Included
+
+- The invoice-first domestic and foreign purchase workflow. Stock Purchase Invoices use
+  `update_stock = 0`. A Purchase Receipt receives the stock.
+- Virtual and physical warehouse classification from the standard `Warehouse Type`. Movement
+  uses the standard Stock Entry Material Transfer.
+- The Stock Entry Item selector for Material Transfer. It filters by the source warehouse and
+  shows the available quantity.
+- Five Logistics reports: `Warehouse Inventory`, `Inventory and Procurement Dashboard`,
+  `Sales Orders Ready for Invoicing`, `Procurement Shortage`, and `Item Weight and Volume`.
+  The existing `Missing Sales Serials` report remains in the app.
+- The Sales Order billing-progress panel. It reads the existing invoice links with a GET request.
+- The Sales Invoice physical-warehouse selectors and the stock-aware Item search.
+- The Workspace «انبار و خرید» permission fix. The Workspace has no module gate. The allowed
+  roles are Stock User, Purchase User, Sales User, and System Manager.
+- The approved integrity checks, scan station, serial transfer, restore operations, and their
+  tests.
+
+### Verified
+
+`SmartProcessERP` runs the approved tree on Frappe v16 and ERPNext 16.35.0. The deployment held
+GL Entry at 2304 rows, Stock Ledger Entry at 1083 rows, and Bin at 178 rows. The Bin quantity was
+848 and the stock value was 12,806,345,000. No Bin row had negative stock. The database-free
+suite and integration evidence are in `docs/test-manifest.md`. The existing `v0.5.0` GitHub tag
+remains unchanged.
+
+### Known limitations
+
+- Authenticated browser acceptance on production remains pending. The documented credentials
+  returned `401` during the reopening. The guest login page, HTTP access, and WebSocket passed.
+- Most production users have language `en`. Persian RTL and the Persianizer font need user-level
+  acceptance.
+- No active submitted Sales Order existed for a live progress-panel test.
+- The Commitment work remains deferred. This release excludes it.
+
+### Future
+
+- Add Persian/Jalali month and year filters and true Jalali monthly aggregation. Keep Gregorian
+  storage in the database.
+
 ## 0.5.0 — 2026-10-22
 
 **Purchasing, virtual warehouses, standard Material Transfer, and the source-warehouse Item
@@ -14,11 +60,9 @@ Sales Invoice committed-stock UI or any change to sales fulfilment; that work re
 and uncommitted. Nothing here is tagged or published by this file.
 
 Verified on `SmartProcessERP` (Frappe v16, ERPNext 16.35.0, port 8080) with the database-free
-suite and the integration proofs named in `docs/test-manifest.md`. The release candidate suite
-runs **1,220 tests, OK (2 skipped)** under `.venv` with `openpyxl` — the missing-library path and
-the development-composition test — and 1,220 tests, OK with 12 skipped without `openpyxl` (the
-XLSX reader tests plus the development-composition test). The paused development tree is not
-part of this release.
+suite and the integration proofs named in `docs/test-manifest.md`. The suite runs **1,268 tests,
+OK (1 skipped)** under `.venv` with `openpyxl`; the same suite under a Python without `openpyxl`
+runs 1,268 tests, OK with 11 skipped (the XLSX reader tests).
 
 ### Added
 
@@ -53,14 +97,17 @@ part of this release.
   keeps ERPNext's own `erpnext.queries.item({is_stock_item: 1})`.
 - A linked stock Purchase Receipt now applies the invoice-row checks to every row, not only rows
   whose item is marked `sp_serial_required`.
-- The release hook composition contains only the approved form scripts and validation handlers.
-  The paused committed-stock feature is not included: no commitment module is imported or
-  registered by this release.
+- The paused committed-stock feature is isolated behind `hooks_commitment.py`. `hooks.py` builds
+  the approved composition from `hooks_composition.py` and loads the development extension only
+  when that module is present; the release subset excludes it. The development tree keeps the
+  same hooks — the committed-stock panel script, the two Sales Invoice lifecycle handlers and the
+  combined Delivery Note validator — while the approved release imports and registers without
+  any commitment module.
 - The approved managed Delivery Note rule (I30) remains in the release: a managed row must name
   its own submitted invoice row, item, company and warehouse company; a stock row names a source;
   and an invoice that already moved stock is not deducted twice. The committed-warehouse checks
-  (I36) are not part of this release. The release runs the approved rule plus the
-  virtual-warehouse refusal.
+  (I36) stay in the development-only `commitment_delivery.py`. The release runs the approved rule
+  plus the virtual-warehouse refusal; the development tree runs the combined validator.
 
 ### Fixed
 

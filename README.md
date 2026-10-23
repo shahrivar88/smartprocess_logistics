@@ -8,9 +8,18 @@ per Item and is **independent of ERPNext's own stock serial numbers**: the app d
 on `Item.has_serial_no`, does not create or edit `Serial No` or `Serial and Batch Bundle`
 records, and never posts stock or accounting entries.
 
+## Release 0.5.1
+
+Version 0.5.1 is the GitHub publication of the production-approved 0.5.0 functionality. The
+application source matches the `SmartProcessERP` deployment. This release adds version metadata
+and release documentation only. It includes the Workspace «انبار و خرید» permission fix, the five
+Logistics reports, the Sales Order progress panel, and the Sales Invoice warehouse and Item
+selectors. The Commitment work remains deferred and excluded. See `CHANGELOG.md` for the
+verification record, known limitations, and the future Persian/Jalali filtering work.
+
 ## Reports
 
-One report ships, and one query is written and not yet wired to a Report document. Each is
+One serial report ships, and one serial query is written and not yet wired to a Report document. Each is
 **one** statement: the registered count comes from a grouped subquery joined in, not from a
 query per row.
 
@@ -18,6 +27,14 @@ query per row.
 | ------ | ----- | ------- | ----- |
 | Sales Serial Register | one row per serial assignment | which serial was sold on which invoice, and when it was registered | `core.reports.build_register_query` only; no Report document ships, so it is reachable from a future report or a console and from nowhere else |
 | Missing Sales Serials | one row per serial-required invoice item row | which rows still need serials, and how many | ships, as a Script Report with Persian columns and Persian filters |
+
+The app also ships the five approved Logistics reports:
+
+- `Warehouse Inventory`
+- `Inventory and Procurement Dashboard`
+- `Sales Orders Ready for Invoicing`
+- `Procurement Shortage`
+- `Item Weight and Volume`
 
 Every value a caller supplies becomes a named parameter. An `IN` list is expanded into one
 placeholder per value rather than relying on a driver to expand a tuple, so nothing depends on
@@ -44,17 +61,18 @@ flag was when an invoice was written, and no historical snapshot has been approv
 hand as well as by the suite: the Desk navigation, the serial dialog, the report, the endpoints,
 company isolation against two companies, and an upgrade run twice.
 
-**0.5.0 — release candidate for purchasing, virtual warehouses and the Stock Entry Item filter.**
-It adds the invoice-first purchase workflow, the `Warehouse Type` classification with the
-Material-Transfer-only movement rule, and the source-warehouse Item selector with quantities and
-permission checks. It does **not** include the paused Sales Invoice committed-stock UI or any
-committed-warehouse checks: no commitment module is included or loaded. The managed Delivery Note
-row/item/company checks and the no-second-deduction guard (I30) remain; only the committed-
-warehouse checks are paused. Verified on `SmartProcessERP` (Frappe v16, ERPNext 16.35.0, port
-8080) by the database-free suite and the integration proofs in `docs/test-manifest.md`; the
-candidate tree was additionally imported and exercised there for the Item selector, the virtual
-Delivery Note refusal and I30. See `CHANGELOG.md` for the exact scope and known limitations. Not
-tagged or published yet.
+**0.5.1 — GitHub publication of the production-approved 0.5.0 functionality.** The application
+source matches the `SmartProcessERP` deployment. This release adds version metadata and release
+documentation only. It includes the invoice-first purchase workflow, the `Warehouse Type`
+classification with the Material-Transfer-only movement rule, the source-warehouse Item selector,
+the five Logistics reports, the Sales Order progress panel, the Sales Invoice warehouse and Item
+selectors, and the Workspace «انبار و خرید» permission fix. It does **not** include the paused
+Sales Invoice committed-stock UI. The approved hooks are built in `hooks_composition.py`, while
+the paused commitment hooks live in `hooks_commitment.py` and are excluded from this release.
+Verified on `SmartProcessERP` (Frappe v16, ERPNext 16.35.0, port 8080) by the database-free suite
+and the integration proofs in `docs/test-manifest.md`. See `CHANGELOG.md` for the exact scope,
+known limitations, and future Persian/Jalali filtering work. The existing `v0.5.0` tag remains
+unchanged.
 
 **0.4.0 — a release candidate, not deployed.** It adds the transfer of a cancelled invoice's
 serials onto its amendment, and the three restores (see below). None of it is installed on
@@ -269,7 +287,7 @@ that mapping is confirmed.
 
 ## Secure API layer
 
-`smartprocess_logistics/api/` holds sixteen whitelisted endpoints and the gateway they drive. They
+`smartprocess_logistics/api/` holds seventeen whitelisted endpoints and the gateway they drive. They
 are reachable as soon as the app is installed, and reachable only through that gateway.
 
 | Endpoint | Needs | Does |
@@ -284,6 +302,7 @@ are reachable as soon as the app is installed, and reachable only through that g
 | `export_serials` | Manager | Every serial and assignment in the site, as one downloadable document |
 | `preview_serial_restore` | Manager | Validate an exported document and report what importing it would do |
 | `apply_serial_restore` | Manager | Create the rows this site can place, in one transaction, and report the rest |
+| `get_sellable_stock` | Viewer | Sellable, sold-awaiting-dispatch and total physical stock for one item and warehouse |
 
 Every decision lives in `core`, which is why the authorization, the reconciliation, the replay
 rules and the failure behaviour are tested without a site. An endpoint only parses arguments,

@@ -1,0 +1,87 @@
+{
+ "custom_fields": [
+  {
+   "description": "در Submit از وزن ناخالص کالا ثبت می‌شود و پس از آن تغییر نمی‌کند.",
+   "dt": "Purchase Receipt Item",
+   "fieldname": "sp_gross_weight",
+   "fieldtype": "Float",
+   "insert_after": "weight_uom",
+   "label": "وزن ناخالص سند",
+   "module": "SmartProcess Logistics",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "description": "در Submit از مشخصات کالا ثبت می‌شود و پس از آن تغییر نمی‌کند.",
+   "dt": "Purchase Receipt Item",
+   "fieldname": "sp_length_cm",
+   "fieldtype": "Float",
+   "insert_after": "sp_gross_weight",
+   "label": "طول سند (سانتی‌متر)",
+   "module": "SmartProcess Logistics",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "description": "در Submit از مشخصات کالا ثبت می‌شود و پس از آن تغییر نمی‌کند.",
+   "dt": "Purchase Receipt Item",
+   "fieldname": "sp_width_cm",
+   "fieldtype": "Float",
+   "insert_after": "sp_length_cm",
+   "label": "عرض سند (سانتی‌متر)",
+   "module": "SmartProcess Logistics",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "description": "در Submit از مشخصات کالا ثبت می‌شود و پس از آن تغییر نمی‌کند.",
+   "dt": "Purchase Receipt Item",
+   "fieldname": "sp_height_cm",
+   "fieldtype": "Float",
+   "insert_after": "sp_width_cm",
+   "label": "ارتفاع سند (سانتی‌متر)",
+   "module": "SmartProcess Logistics",
+   "non_negative": 1,
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "نشان می‌دهد مقادیر اندازه‌گیری این ردیف در Submit ثبت شده‌اند؛ برای جلوگیری از بازنویسی snapshot در amendment.",
+   "dt": "Purchase Receipt Item",
+   "fieldname": "sp_measurement_snapshot",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "insert_after": "sp_height_cm",
+   "label": "اندازه‌گیری ثبت‌شده",
+   "module": "SmartProcess Logistics",
+   "read_only": 1
+  },
+  {
+   "description": "کد کالایی که Snapshot برای آن ثبت شده است؛ برای تشخیص تغییر کالا در amendment.",
+   "dt": "Purchase Receipt Item",
+   "fieldname": "sp_measurement_item",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "insert_after": "sp_measurement_snapshot",
+   "label": "کالای اندازه‌گیری",
+   "module": "SmartProcess Logistics",
+   "read_only": 1
+  },
+  {
+   "description": "نام فیلدهای اندازه‌گیری که هنگام Submit واقعاً ثبت شده بودند؛ برای حفظ availability در تاریخچه.",
+   "dt": "Purchase Receipt Item",
+   "fieldname": "sp_measurement_presence",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "insert_after": "sp_measurement_item",
+   "label": "فیلدهای اندازه‌گیری ثبت‌شده",
+   "module": "SmartProcess Logistics",
+   "read_only": 1
+  }
+ ],
+ "custom_perms": [],
+ "doctype": "Purchase Receipt Item",
+ "links": [],
+ "property_setters": [],
+ "sync_on_migrate": 1
+}

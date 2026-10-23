@@ -13,9 +13,6 @@ Rules:
 5. Delete only what this app owns. Serial and assignment records are owned by the app;
    Company, Customer, Item and Sales Invoice records belong to the site.
 
-The proof scripts named below were development-environment artifacts. They are recorded as
-evidence but are not part of the 0.5.0 release candidate.
-
 | Date | Phase | Site | DocType | Name | Purpose | Created by | Deleted on |
 | ---- | ----- | ---- | ------- | ---- | ------- | ---------- | ---------- |
 | 2026-10-13 | 4 | SmartProcessERP | Item | `SP-TEST-WARRANTY-ITEM` | A non-stock item carrying `sp_serial_required`, so the report and the button have something eligible | main agent | **kept** |
@@ -616,6 +613,47 @@ sales invoice and a non-managed foreign purchase at the market rate (both allowe
 checks passed. The run leaves its identified records on 8080; it changes no setting and runs no
 migration.
 
+## Phase 3B — committed warehouse and available-to-sell control (2026-10-20)
+
+`tests/test_commitment.py` adds 26 database-free tests for the pure planning rules, the
+availability arithmetic, the token and the service's static safety; `tests/test_integrity.py`
+adds the committed-warehouse, unlinked-row, extra-row, legacy-invoice and submit-time checks.
+The full suite is **1,218 tests, OK (1 skip)**; `ruff check` and `ruff format --check` pass.
+
+The production proof is `deployment/proofs/commitment_8080_check.py`, run from
+`bench --site SmartProcessERP console` against a fresh disposable managed item. It passed
+**32/32** checks: 50-of-100 commitment with the correct SLE and no GL on the transfer; Sales
+Invoice GL with no SLE; the three availability figures; a 60-of-50 refusal with the invoice
+still a draft and no entry; two rows from two warehouses in one entry; partial Delivery Notes
+30 and 20 from the committed warehouse with COGS and no second deduction; an independent
+managed Delivery Note refused; an unlinked extra row refused; a wrong-warehouse note refused;
+cancel-before-dispatch reversing the entry; cancel-after-dispatch refused; repeated hook
+idempotence; and a serial assignment and master surviving submit and cancel.
+
+The concurrency proof is `deployment/proofs/concurrent_setup.py` plus two simultaneous
+`concurrent_submit.py` processes. Two drafts of 60 against 100 were released at once: exactly
+one submitted, the other was refused with the Persian concurrent-submission sentence and left
+as a draft with no entry; Stores ended at 40 and the committed warehouse at 60, with SLE sums
+matching and no negative stock.
+
+`deployment/proofs/bin_valuation_repro.py` reproduces the stale `Bin.stock_value` using only
+standard Stock Entries: after a receipt of 100 at 1,000 and a transfer of 50 that is then
+cancelled, Stores holds quantity 100, Bin value 50,000, SLE value 100,000, and no GL. This is
+ERPNext's cancellation path, not this app's code; I38 and the availability warning record it.
+`deployment/proofs/availability_permission_check.py` shows the endpoint's Administrator and
+Viewer answers, the refusal for a Sales User without an app role, and the Sales User's refusal
+to create a Stock Entry (with no entry written). `deployment/proofs/legacy_delivery_check.py`
+shows a historical managed invoice with no commitment entry still shipping through a standard
+Delivery Note from its original warehouse, then cancelling it.
+`deployment/proofs/commitment_token_check.py` submits a Stock Entry carrying the invoice's
+`remarks` token but the wrong quantity; the invoice is refused with «تعهد ناسازگار» and stays a
+draft. `deployment/proofs/purchase_fx_regression.py` re-checks the purchase side after the
+change: a foreign Purchase Invoice bills with no stock, a matching-rate Purchase Receipt
+receives 1 unit at the invoice's rate (SLE 5,000,000 for 1 × 10 USD × 500,000), and a receipt
+with a different rate is refused with «نرخ تبدیل». Both documents were cancelled.
+`deployment/proofs/cleanup_commitment_tests.py` cancels or deletes the disposable test
+documents without touching serial masters or assignments.
+
 ## Simplified virtual/physical warehouses (2026-10-21)
 
 The Transit-only arrival service and its per-company JSON configuration were removed. A
@@ -630,10 +668,9 @@ directions, the Material-Transfer-only rule for virtual movements and the virtua
 and the surviving safety checks. `tests/test_integrity.py` also pins the return link when the
 original receipt row has no `purchase_invoice_item`: the unique invoice row is used, a missing
 or ambiguous row is refused, a Purchase Receipt Item name is never written into that field,
-and a return with no Purchase Invoice anywhere is left to the standard workflow. The
-development-only `tests/test_commitment.py` adds the virtual committed-warehouse refusal, the
-zero-sellable virtual source and its availability arithmetic; that test module is not part of
-this release candidate. The invariants are recorded as I39.
+and a return with no Purchase Invoice anywhere is left to the standard workflow. `tests/test_commitment.py` adds the virtual committed-warehouse refusal, the zero-sellable
+virtual source and its availability arithmetic; the invariants are recorded as I35 (amended)
+and I39.
 
 The integration proof is `deployment/proofs/virtual_warehouse_workflow.py` on **8080** with
 isolated `SP-VW` records. It passed: a full USD Purchase Invoice with no stock and one supplier
@@ -784,24 +821,14 @@ standard ERPNext treatment of a landed cost that the supplier invoice never bill
 duplicate posting. Clearing it requires a freight credit note or an LCV adjustment; the app
 does not force it to zero.
 
-Version `0.5.0` and its CHANGELOG/README entry are prepared for release but not committed. The
-release boundary audit found one cross-feature dependency: `integrity.py` imported
-`core.commitment.commitment_token`, and the working tree registered the paused Sales Invoice
-commitment lifecycle and Delivery Note commitment validation. That dependency is removed from
-the release candidate; the isolation is recorded below. The Item filter is independent of all of
-it; purchasing and virtual warehouses share the approved `integrity.py`.
-
-The final isolated release candidate, built from the approved files only, ran **1,220
-database-free tests, OK with 2 skipped** under `.venv` with `openpyxl` (12 skipped without it),
-and `ruff check` and `ruff format --check` passed over 104 files. It imported and registered only
-the approved hooks, and on 8080 it returned the warehouse-filtered Item rows, refused a virtual
-Delivery Note, and refused an unlinked managed Delivery Note with `DN_NOT_LINKED`. No document,
-Item or Bin row remained. The paused development tree is not part of that candidate.
+Version `0.5.0` and its CHANGELOG/README entry are prepared but not committed. The release
+boundary audit found one dependency that must be decided before an all-in release:
+`integrity.py` imports `core.commitment.commitment_token`, and the working tree registers the
+paused Sales Invoice commitment lifecycle and Delivery Note commitment validation. The Item
+filter is independent of all of them; purchasing and virtual warehouses share `integrity.py`
+with the paused commitment code.
 
 ## Commitment isolation before 0.5.0 (2026-10-22)
-
-This section records the development-tree separation that made the release boundary possible.
-The release candidate contains none of the paused modules or tests named here.
 
 The cross-feature dependency was `integrity.py`'s module-level
 `from smartprocess_logistics.core.commitment import commitment_token`, used only by

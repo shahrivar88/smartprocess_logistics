@@ -70,6 +70,7 @@ def _ensure_app_state():
 	roles.ensure_roles()
 	constraints.ensure_unique_constraints()
 	seeds.sync_next_row_command()
+	seeds.sync_inventory_policy_defaults()
 	seeds.sync_normalization_version()
 	seeds.seed_settings()
 
