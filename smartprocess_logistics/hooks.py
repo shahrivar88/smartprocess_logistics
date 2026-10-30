@@ -36,6 +36,12 @@ required_apps = ["frappe", "erpnext"]
 # The report's own `.js` is loaded by Frappe from its folder and needs no hook.
 app_include_css = ["/assets/smartprocess_logistics/css/logistics.css"]
 
+# The Desk's only shared script: the display switches, read once per session from boot. Every
+# form script that decides whether to override a Link query asks it instead of asking the
+# server, so opening a form costs no request and a switched-off feature leaves the native
+# selector untouched.
+app_include_js = ["/assets/smartprocess_logistics/js/visibility.js"]
+
 # The approved scripts. The development composition appends the committed-stock panel file from
 # `hooks_commitment.py`; the release subset leaves it out.
 doctype_js = hooks_composition.approved_doctype_js()
@@ -84,6 +90,11 @@ if importlib.util.find_spec("smartprocess_logistics.hooks_commitment"):
 # reporting the app as installed with the work half done. `after_migrate` is what repairs that.
 after_install = "smartprocess_logistics.install.after_install"
 after_migrate = "smartprocess_logistics.install.after_migrate"
+
+# The seven display switches, handed to the Desk with the rest of the boot payload. Frappe calls
+# every `boot_session` hook with `bootinfo` (`frappe/boot.py::get_bootinfo`); this one adds a
+# namespace and changes nothing else.
+boot_session = "smartprocess_logistics.boot.boot_session"
 
 # The app's only scheduled job, and the reason it has one: `Logistics Import Session` is
 # transient by design, so rows that were never confirmed, and rows whose import was applied

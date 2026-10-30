@@ -10,23 +10,34 @@ from smartprocess_logistics.core.stock_search import format_quantity
 
 PHYSICAL_LABEL = "موجودی فیزیکی"
 VIRTUAL_LABEL = "موجودی مجازی"
+WAREHOUSE_STOCK_LABEL = "موجودی"
+STOCK_SEPARATOR = " | "
 
 
-def stock_text(physical, virtual=None, uom="", include_virtual=False):
-	"""`موجودی فیزیکی: 10 Nos` and, when asked, a separate virtual part."""
-	physical = quantity(physical)
-	parts = [f"{PHYSICAL_LABEL}: {format_quantity(physical)} {uom}".strip()]
+def warehouse_stock_text(actual_qty):
+	"""The secondary line under a warehouse in a sales selector."""
+	return f"{WAREHOUSE_STOCK_LABEL}: {format_quantity(quantity(actual_qty))}"
 
-	if include_virtual:
-		virtual = quantity(virtual or 0)
-		parts.append(f"{VIRTUAL_LABEL}: {format_quantity(virtual)} {uom}".strip())
 
-	return parts
+def stock_text(physical, uom=""):
+	"""`موجودی فیزیکی: 10 Nos` — the Sales Invoice Item line, physical stock only."""
+	return f"{PHYSICAL_LABEL}: {format_quantity(quantity(physical))} {(uom or '').strip()}".strip()
+
+
+def combined_stock_text(physical, virtual=None):
+	"""`موجودی فیزیکی: 24 | موجودی مجازی: 15` — the one line Quotation and Sales Order show."""
+	physical = format_quantity(quantity(physical))
+	virtual = format_quantity(quantity(virtual or 0))
+
+	return STOCK_SEPARATOR.join([f"{PHYSICAL_LABEL}: {physical}", f"{VIRTUAL_LABEL}: {virtual}"])
 
 
 def item_suggestion(item_code, item_name, physical, virtual=None, uom="", include_virtual=False):
 	"""A Link row: Item Code as the value, Item Name and stock as the description."""
 	parts = [item_name or ""]
-	parts.extend(stock_text(physical, virtual, uom, include_virtual))
+	if include_virtual:
+		parts.append(combined_stock_text(physical, virtual))
+	else:
+		parts.append(stock_text(physical, uom))
 
 	return (item_code, *parts)

@@ -26,6 +26,9 @@ def approved_doctype_js():
 		# Stock-aware Item suggestions and the read-only billing-progress panel. The panel
 		# reads standard Sales Invoice links; it never creates or submits an invoice.
 		"Sales Order": "public/js/sales_order_stock_visibility.js",
+		# Stock-aware Item and warehouse selectors for a document that only plans: the
+		# selector offers virtual warehouses too, and nothing here reserves or moves stock.
+		"Quotation": "public/js/quotation_stock_visibility.js",
 		# The two buttons that export this app's records and import them back. They live on the
 		# Settings single because that is where an administrator looks for them, and they are the
 		# only supported way to carry the history across a removal.

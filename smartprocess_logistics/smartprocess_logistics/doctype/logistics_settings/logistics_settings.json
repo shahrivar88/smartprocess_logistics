@@ -39,7 +39,16 @@
   "inventory_column",
   "sp_virtual_stock_covers_procurement",
   "sp_recommended_purchase_net_of_open_po",
-  "sp_inventory_policy_version"
+  "sp_inventory_policy_version",
+  "display_section",
+  "sp_show_si_item_stock",
+  "sp_show_warehouse_stock_in_selector",
+  "sp_si_physical_warehouses_only",
+  "display_column",
+  "sp_show_quotation_item_stock",
+  "sp_show_quotation_warehouse_stock",
+  "sp_show_so_item_stock",
+  "sp_show_so_warehouse_stock"
  ],
  "fields": [
   {
@@ -255,11 +264,69 @@
    "label": "نسخهٔ سیاست خرید و موجودی",
    "non_negative": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "display_section",
+   "fieldtype": "Section Break",
+   "label": "نمایش موجودی در فرم‌های فروش"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، زیر نام کالا در فهرست کالای فاکتور فروش، موجودی فیزیکی کل نمایش داده می‌شود. خاموش‌کردن آن فقط همین خط را برمی‌دارد و موجودی، ارزیابی یا اسناد را تغییر نمی‌دهد.",
+   "fieldname": "sp_show_si_item_stock",
+   "fieldtype": "Check",
+   "label": "موجودی فیزیکی کالا در فاکتور فروش"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، موجودی واقعی کالای انتخاب‌شده زیر هر انبار در فهرست انبارهای فاکتور فروش نمایش داده می‌شود.",
+   "fieldname": "sp_show_warehouse_stock_in_selector",
+   "fieldtype": "Check",
+   "label": "موجودی کالا در فهرست انبارهای فاکتور فروش"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، فهرست انبارهای فاکتور فروش فقط انبارهای فیزیکی را نشان می‌دهد. خاموش‌کردن آن فهرست استاندارد انبارها را برمی‌گرداند؛ اعتبارسنجی و مجوزهای خود ERPNext سرجای خود می‌مانند و قاعدهٔ این برنامه که انبار مجازی منبع فروش نیست، هنگام ذخیره همچنان انتخاب انبار مجازی را رد می‌کند.",
+   "fieldname": "sp_si_physical_warehouses_only",
+   "fieldtype": "Check",
+   "label": "فقط انبارهای فیزیکی در فاکتور فروش"
+  },
+  {
+   "fieldname": "display_column",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، زیر نام کالا در فهرست کالای پیش‌فاکتور، موجودی فیزیکی و مجازی جداگانه و در یک خط نمایش داده می‌شود.",
+   "fieldname": "sp_show_quotation_item_stock",
+   "fieldtype": "Check",
+   "label": "موجودی کالا در پیش‌فاکتور"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، زیر نام هر انبار در فهرست انبارهای پیش‌فاکتور، موجودی همان کالا در آن انبار نمایش داده می‌شود.",
+   "fieldname": "sp_show_quotation_warehouse_stock",
+   "fieldtype": "Check",
+   "label": "موجودی کالا در فهرست انبارهای پیش‌فاکتور"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، زیر نام کالا در فهرست کالای سفارش فروش، موجودی فیزیکی و مجازی جداگانه و در یک خط نمایش داده می‌شود.",
+   "fieldname": "sp_show_so_item_stock",
+   "fieldtype": "Check",
+   "label": "موجودی کالا در سفارش فروش"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، زیر نام هر انبار در فهرست انبارهای سفارش فروش، موجودی همان کالا در آن انبار نمایش داده می‌شود.",
+   "fieldname": "sp_show_so_warehouse_stock",
+   "fieldtype": "Check",
+   "label": "موجودی کالا در فهرست انبارهای سفارش فروش"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-13 16:00:00.000000",
+ "modified": "2026-10-30 12:30:00.000000",
  "modified_by": "Administrator",
  "module": "SmartProcess Logistics",
  "name": "Logistics Settings",
