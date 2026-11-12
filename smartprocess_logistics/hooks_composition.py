@@ -73,9 +73,12 @@ def approved_doc_events():
 		"Purchase Order": {
 			"before_submit": "smartprocess_logistics.measurements.snapshot_purchase_document",
 		},
+		# A submitted receipt still depends on the invoice it names, so the invoice cannot be
+		# cancelled first: cancel the receipt, then the invoice.
 		"Purchase Invoice": {
 			"validate": "smartprocess_logistics.integrity.validate_purchase_invoice",
 			"before_submit": "smartprocess_logistics.measurements.snapshot_purchase_document",
+			"before_cancel": "smartprocess_logistics.purchase.invoice.before_cancel",
 		},
 		# Purchase owns the invoice-first guard and the quantity-based receipt rules. Every
 		# stock receipt row must link a submitted Purchase Invoice; the destination may be any

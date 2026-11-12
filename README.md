@@ -367,6 +367,16 @@ assets and opening entries keep their standard workflow.
 A Purchase Invoice Return/Debit Note may be financial-only (`update_stock = 0`); stock returns
 must use a Purchase Receipt Return.
 
+A submitted Purchase Invoice cannot be cancelled while a submitted Purchase Receipt still
+depends on it. The Cancel button and the REST/API cancel path both run the app's `before_cancel`
+guard, which refuses the cancel and names the blocking receipts; cancel the receipt first, then
+the invoice. The guard reads the receipt row's `purchase_invoice` and `purchase_invoice_item`
+links and, on a site that added one, a receipt-header link; a receipt of another company neither
+blocks nor is named. A draft or cancelled receipt never blocks. The guard locks the invoice row
+before it reads receipts, and the receipt validator locks the same row before it reads the
+invoice, so a concurrent receipt submit and invoice cancel cannot both pass. ERPNext's own
+back-link check remains the backstop when the guard is bypassed.
+
 `set_row_serials` and `add_row_serials` differ in what they do to a row that already holds
 serials, and the difference is deliberate. `set_row_serials` names one row and **replaces** it:
 the set it sends is the set the row ends with. `add_row_serials` adds one column's labels and
@@ -1019,11 +1029,12 @@ has not been run; see [Installation](#installation).
 - **Purchase serial tracking is not implemented.** Serial capture and movement remain
   Sales-Invoice-side only; Purchase Receipt, warehouse transfer, sales and warranty are not yet
   connected into one purchase-serial flow.
-- **A submitted Purchase Invoice can be cancelled under a submitted Purchase Receipt.** ERPNext's
-  `Purchase Invoice.on_cancel` does not look for receipts that name the invoice, and this app adds
-  no guard of its own. The invoice-first rule is checked when the receipt is submitted; nothing
-  keeps it true afterwards. Cancelling the invoice is a deliberate operator action that leaves the
-  receipt standing, and no automatic repair is attempted.
+- **The cancel guard has three edges.** A cancel that sets `doc.flags.ignore_links` bypasses it,
+  because that is the flag ERPNext's own back-link check honours and a documented data repair
+  needs it; a cross-company `purchase_invoice_item` Data link is not a Link and no standard check
+  sees it, so it is ignored by design; and the guard names up to ten blocking receipts to the
+  user attempting the cancel, who can already read them. The `purchase_invoice` column of
+  `Purchase Receipt Item` is not indexed, so the lookup costs a scan on a large receipt table.
 - **The Purchase Receipt weight/volume panel is verified server-side, not visually.** Its
   endpoint and calculations are tested, but the Desk panel has not been accepted in a real
   browser.

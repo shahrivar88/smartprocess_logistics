@@ -331,11 +331,14 @@ def validate_purchase_receipt(doc, method=None):
 	pi_items = {}
 
 	for name in pi_names:
+		# The invoice's `before_cancel` takes this same lock before it looks for receipts, so a
+		# receipt submit and an invoice cancel cannot both pass each other's check.
 		header = frappe.db.get_value(
 			"Purchase Invoice",
 			name,
 			["company", "currency", "supplier", "conversion_rate", "update_stock", "docstatus"],
 			as_dict=True,
+			for_update=True,
 		)
 		pi_headers[name] = header or {}
 		pi_items[name] = frappe.get_all(

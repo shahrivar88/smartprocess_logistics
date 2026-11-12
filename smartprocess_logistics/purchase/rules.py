@@ -88,3 +88,41 @@ def stock_receipt_problems(rows, *, invoice_first=True):
 			)
 
 	return tuple(problems)
+
+
+def invoice_cancel_problems(receipts, company, shown_limit=10):
+	"""A submitted invoice cannot be cancelled while a submitted receipt still names it.
+
+	`receipts` snapshots every Purchase Receipt that references the invoice through either
+	item-level link or a header link a site added: `name`, `company` and `docstatus`. Only a
+	submitted receipt blocks. A draft receipt has no stock or ledger effect to unwind, and a
+	cancelled receipt no longer depends on the invoice. A return is a receipt too: a submitted
+	purchase return keeps its rows pointed at the invoice's own item rows.
+
+	A receipt of another company never blocks: it is not a dependency of this invoice, and
+	naming it would disclose another company's document. A Link that crosses companies is
+	still refused by the framework's back-link check when the invoice is cancelled.
+	"""
+	blocking = sorted(
+		{
+			row.get("name")
+			for row in receipts
+			if row.get("docstatus") == 1
+			and row.get("name")
+			and (not company or row.get("company") == company)
+		}
+	)
+	if not blocking:
+		return ()
+
+	shown = "، ".join(blocking[:shown_limit])
+	if len(blocking) > shown_limit:
+		shown = f"{shown} و {len(blocking) - shown_limit} رسید دیگر"
+
+	return (
+		Problem(
+			"PI_CANCEL_BLOCKED_BY_PURCHASE_RECEIPT",
+			f"فاکتور خرید لغو نمی‌شود: {len(blocking)} رسید خرید ثبت‌شده به آن وابسته است ({shown}). "
+			"ابتدا رسیدهای خرید را لغو کنید، سپس فاکتور خرید را لغو کنید.",
+		),
+	)

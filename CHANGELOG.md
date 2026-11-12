@@ -22,6 +22,12 @@ uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `desktop_icon/لجستیک.json` that links the «انبار و خرید» Workspace Sidebar.
 - **Warehouse Type fixtures**: the explicit `Physical` type, its default for new Warehouses, and
   the translated-doctype property.
+- **Purchase Invoice cancel guard.** A submitted Purchase Invoice cannot be cancelled while a
+  submitted Purchase Receipt still depends on it. `before_cancel` refuses with a Persian message
+  that names the blocking receipts, so the operator is told to cancel the receipt first. It reads
+  the receipt row's `purchase_invoice` and `purchase_invoice_item` links and an optional receipt
+  header link, ignores draft, cancelled and other-company receipts, and locks the invoice row so
+  a concurrent receipt submit cannot race it. ERPNext's back-link check stays the backstop.
 
 ### Changed
 
@@ -57,20 +63,21 @@ uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Verified
 
-- Full database-free suite: **1508 tests OK** — 12 skipped with the system interpreter and 2 with
-  the isolated `openpyxl` environment.
-- On `SmartProcessERP`: all six Logistics reports execute; physical/Transit/Virtual separation,
-  selector filtering, Virtual-only rejected warehouse, invoice-first refusal, Sidebar, Workspace,
-  Dock, Desktop Icon and the Administrator homepage entry were checked. Administrator `get_bootinfo`
-  includes «لجستیک»; the non-Administrator failure belongs to the separate homepage app.
-- Every deployed runtime file matched this branch byte-for-byte except the header comments of
-  `quotation_stock_visibility.js` and `sales_order_stock_visibility.js`; their executable code is
-  identical after comments are stripped. The review fixes that landed after that comparison —
-  the company-scoped rejected-warehouse lookup and the optional managed field in
-  `purchase/receipt.py`, the `policy.kind` membership rule, and the open-supply policy in
-  «تراز موجودی» — are branch-only and not on `SmartProcessERP`. No further deployment was
-  performed in this phase.
-- Backup and pre-deployment file snapshot are retained outside the repository for rollback.
+- Full database-free suite: **1523 tests OK** — 12 skipped with the system interpreter and 2 with
+  the isolated `openpyxl` environment. The focused purchase rules suite is 32 tests, all passing.
+- Isolated end-to-end cancellation on `SmartProcessERP` in `_Test Company`: a submitted Purchase
+  Invoice (`BI-260158`) and its submitted Purchase Receipt (`BR-050005`) were created; cancelling
+  the invoice first was refused with a `ValidationError` that named `BR-050005` and left the
+  invoice submitted; cancelling the receipt first and the invoice second succeeded; both Stock
+  Ledger Entries and all four GL Entries ended cancelled with zero net; the Bin quantity returned
+  to its starting value; both documents were then deleted, leaving no Purchase Invoice, Purchase
+  Receipt, Stock Ledger Entry or GL Entry behind.
+- The whole package was synced to the deployed mount and verified byte-for-byte; cache was
+  cleared; the five application services were restarted. `frappe.ping` answers `pong` on port
+  8080, and the last two hours hold no `Error Log` entry and no container traceback.
+- Backups taken before deployment: database, public files, private files and `site_config_backup`
+  as `20261112_181109-SmartProcessERP-…` under `sites/SmartProcessERP/private/backups/`, and the
+  pre-sync deployed app as `deployed_app_before_sync_20261112_1811.tar.gz` outside the repository.
 
 ### Known limitations
 
@@ -79,10 +86,11 @@ uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
   separate app and was not modified.
 - Purchase serial tracking through Purchase Receipt, warehouse transfer, sales and warranty is
   designed but not implemented; serial work remains Sales-Invoice-side.
-- A submitted Purchase Invoice can still be cancelled while a submitted Purchase Receipt points
-  at it. ERPNext's `Purchase Invoice.on_cancel` has no check for that link, and this app does not
-  add one: a cancel guard is new enforcement and needs its own approved step. The invoice-first
-  rule is enforced when the receipt is submitted, not kept true by the invoice afterwards.
+- The cancel guard has three edges. A cancel that sets `doc.flags.ignore_links` bypasses it,
+  because that is the flag ERPNext's own back-link check honours and a documented data repair
+  needs it; a cross-company `purchase_invoice_item` Data link is not a Link and no standard check
+  sees it, so it is ignored by design; and the `purchase_invoice` column of
+  `Purchase Receipt Item` is not indexed, so the lookup costs a scan on a large receipt table.
 - The Purchase Receipt weight/volume panel has not been accepted visually in a real browser.
 - `sp_virtual_stock_covers_procurement` is retained as a legacy, non-operational setting.
 - Purchase Invoice GL errors remain in the Accounting project; this app does not change ledger
