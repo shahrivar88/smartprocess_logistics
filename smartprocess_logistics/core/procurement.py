@@ -42,6 +42,29 @@ READY = "ready"
 INCOMING = "incoming"
 WAITING = "waiting"
 
+# The operational status model. It is derived, never stored: native `status`, `docstatus`,
+# `per_delivered` and `per_billed` stay the source of truth, and nothing here writes a document.
+ORDER_OPEN = "open"
+ORDER_PARTIALLY_INVOICED = "partially_invoiced"
+ORDER_PARTIALLY_DELIVERED = "partially_delivered"
+ORDER_FULLY_DELIVERED = "fully_delivered"
+ORDER_CLOSED = "closed"
+ORDER_CANCELLED = "cancelled"
+
+OPERATIONAL_STATUSES = (
+	ORDER_OPEN,
+	ORDER_PARTIALLY_INVOICED,
+	ORDER_PARTIALLY_DELIVERED,
+	ORDER_FULLY_DELIVERED,
+	ORDER_CLOSED,
+	ORDER_CANCELLED,
+)
+
+# States that still carry work. Delivery is what demand depends on, so a fully delivered order
+# carries no demand even when it is still waiting to be billed.
+CLOSED_DELIVERY_STATUSES = frozenset({"closed", "stopped", "on hold"})
+CANCELLED_STATUSES = frozenset({"cancelled", "canceled"})
+
 READINESS_VALUES = (READY, INCOMING, WAITING)
 
 CREDIT_NOTE_VALUE_ONLY = "value_only_credit_note"
@@ -74,6 +97,59 @@ def is_open_sales_order(docstatus, status):
 def is_open_purchase_order(docstatus, status):
 	"""A submitted Purchase Order whose remaining quantity is still expected."""
 	return _docstatus(docstatus) == 1 and _normalized_status(status) not in OPEN_PURCHASE_ORDER_EXCLUSIONS
+
+
+def _percent(value):
+	"""A native percentage field. `None`/blank reads as "not filled", not as zero."""
+	if value in (None, ""):
+		return None
+	try:
+		return float(value)
+	except (TypeError, ValueError):
+		return None
+
+
+def operational_status(docstatus, status, per_delivered=None, per_billed=None):
+	"""The operational state of a Sales Order, from native fields only.
+
+	Precedence, because one order can be in two states at once: Cancelled, Closed, Fully
+	Delivered, Partially Delivered, Partially Invoiced, Open. Delivery outranks billing on
+	purpose — an order that has shipped half its quantity is "partially delivered" whether or
+	not an invoice exists, and an order that shipped everything is "fully delivered" even when
+	billing is still pending.
+	"""
+	code = _docstatus(docstatus)
+	normalized = _normalized_status(status)
+
+	if code == 2 or normalized in CANCELLED_STATUSES:
+		return ORDER_CANCELLED
+	if normalized in CLOSED_DELIVERY_STATUSES:
+		return ORDER_CLOSED
+
+	delivered = _percent(per_delivered)
+	billed = _percent(per_billed)
+
+	if delivered is not None and delivered >= 100:
+		return ORDER_FULLY_DELIVERED
+	if delivered is not None and delivered > 0:
+		return ORDER_PARTIALLY_DELIVERED
+	if billed is not None and billed > 0:
+		return ORDER_PARTIALLY_INVOICED
+
+	return ORDER_OPEN
+
+
+def contributes_to_demand(docstatus, status, per_delivered=None):
+	"""Whether an order still carries operational demand.
+
+	Submitted, not closed and not cancelled — and with a delivery balance left. A fully
+	delivered order contributes nothing even if it is not billed yet: demand is about shipping.
+	"""
+	if not is_open_sales_order(docstatus, status):
+		return False
+
+	delivered = _percent(per_delivered)
+	return delivered is None or delivered < 100
 
 
 def _company(company):

@@ -18,7 +18,8 @@ def columns():
 		{"label": _("شرکت"), "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 120},
 		{"label": _("کالا"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 130},
 		{"label": _("موجودی فیزیکی"), "fieldname": "physical_stock", "fieldtype": "Float", "width": 110},
-		{"label": _("موجودی مجازی/در راه"), "fieldname": "virtual_stock", "fieldtype": "Float", "width": 130},
+		{"label": _("موجودی ترانزیت"), "fieldname": "transit_stock", "fieldtype": "Float", "width": 110},
+		{"label": _("موجودی مجازی"), "fieldname": "virtual_stock", "fieldtype": "Float", "width": 110},
 		{"label": _("کل موجودی"), "fieldname": "total_stock", "fieldtype": "Float", "width": 100},
 		{"label": _("تقاضای سفارش فروش"), "fieldname": "open_demand", "fieldtype": "Float", "width": 120},
 		{

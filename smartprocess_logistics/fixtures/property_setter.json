@@ -1,0 +1,21 @@
+[
+ {
+  "doctype": "Property Setter",
+  "doctype_or_field": "DocField",
+  "doc_type": "Warehouse",
+  "field_name": "warehouse_type",
+  "name": "Warehouse-warehouse_type-default",
+  "property": "default",
+  "property_type": "Text",
+  "value": "Physical"
+ },
+ {
+  "doctype": "Property Setter",
+  "doctype_or_field": "DocType",
+  "doc_type": "Warehouse Type",
+  "name": "Warehouse Type-translated_doctype",
+  "property": "translated_doctype",
+  "property_type": "Check",
+  "value": "1"
+ }
+]

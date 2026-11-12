@@ -58,18 +58,20 @@ class TestWarehouseInventoryRows(UnitTestCase):
 
 
 class TestDashboardRows(UnitTestCase):
-	def test_dashboard_separates_stock_demand_and_shortage(self):
+	def test_dashboard_separates_physical_transit_and_virtual(self):
 		rows = reporting.inventory_dashboard_rows(
 			"COMPANY",
 			{"ITEM": ItemStock(physical=D("20"), virtual=D("30"))},
 			[so(qty=100)],
 			{"ITEM": D("10")},
+			transit_by_item={"ITEM": D("30")},
 		)
 
 		self.assertEqual(len(rows), 1)
 		row = rows[0]
 		self.assertEqual(row["physical_stock"], D("20"))
-		self.assertEqual(row["virtual_stock"], D("30"))
+		self.assertEqual(row["transit_stock"], D("30"))
+		self.assertEqual(row["virtual_stock"], D("0"))
 		self.assertEqual(row["total_stock"], D("50"))
 		self.assertEqual(row["open_demand"], D("100"))
 		self.assertEqual(row["physically_deliverable"], D("20"))
@@ -78,6 +80,19 @@ class TestDashboardRows(UnitTestCase):
 		self.assertEqual(row["procurement_shortage"], D("50"))
 		self.assertEqual(row["open_purchase_supply"], D("10"))
 		self.assertEqual(row["recommended_purchase"], D("40"))
+
+	def test_virtual_stock_never_covers_the_operational_shortage(self):
+		rows = reporting.inventory_dashboard_rows(
+			"COMPANY",
+			{"ITEM": ItemStock(physical=D("20"), virtual=D("30"))},
+			[so(qty=100)],
+			{"ITEM": D("10")},
+		)
+
+		self.assertEqual(rows[0]["transit_stock"], D("0"))
+		self.assertEqual(rows[0]["virtual_stock"], D("30"))
+		self.assertEqual(rows[0]["procurement_shortage"], D("80"))
+		self.assertEqual(rows[0]["recommended_purchase"], D("70"))
 
 	def test_dashboard_does_not_give_the_same_stock_to_two_orders(self):
 		lines = (
@@ -103,11 +118,25 @@ class TestDashboardRows(UnitTestCase):
 			{"ITEM": ItemStock(physical=D("20"), virtual=D("30"))},
 			lines,
 			{"ITEM": D("10")},
+			transit_by_item={"ITEM": D("30")},
 			related_orders={"ITEM": ("SO-A",)},
 		)
 
 		self.assertEqual(rows[0]["related_orders"], "SO-A")
+		self.assertEqual(rows[0]["transit_stock"], D("30"))
 		self.assertEqual(rows[0]["suggested_purchase"], D("40"))
+
+	def test_procurement_shortage_ignores_virtual_stock(self):
+		rows = reporting.procurement_shortage_rows(
+			"COMPANY",
+			{"ITEM": ItemStock(physical=D("20"), virtual=D("30"))},
+			(so(name="A", so_name="SO-A", qty=100),),
+			{"ITEM": D("10")},
+		)
+
+		self.assertEqual(rows[0]["virtual_stock"], D("30"))
+		self.assertEqual(rows[0]["procurement_shortage"], D("80"))
+		self.assertEqual(rows[0]["suggested_purchase"], D("70"))
 
 
 class TestReadyInvoicingRows(UnitTestCase):
@@ -213,6 +242,20 @@ class TestWeightVolumeRows(UnitTestCase):
 		self.assertEqual(current_row["gross_source"], CURRENT)
 		self.assertEqual(historical_row["net_source"], HISTORICAL)
 		self.assertEqual(historical_row["volume_source"], HISTORICAL)
+
+	def test_a_missing_net_weight_stays_missing_when_the_caller_says_so(self):
+		measurement = Measurement(weight_per_unit=2, gross_weight=3, source=HISTORICAL)
+
+		row = reporting.weight_volume_row(
+			4,
+			measurement=measurement,
+			net_available=False,
+			gross_available=True,
+		)
+
+		self.assertIsNone(row["net_weight"])
+		self.assertEqual(row["net_source"], "unavailable")
+		self.assertEqual(row["gross_weight"], D("12"))
 
 	def test_missing_gross_and_dimensions_stay_missing_even_when_flags_are_true(self):
 		measurement = Measurement(

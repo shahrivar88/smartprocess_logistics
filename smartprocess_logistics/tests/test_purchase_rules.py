@@ -84,7 +84,102 @@ class TestInvoiceFirstReceipt(UnitTestCase):
 		)
 
 
+class TestRejectedWarehouse(UnitTestCase):
+	def test_rejected_quantity_requires_a_rejected_warehouse(self):
+		problems = rules.stock_receipt_problems(
+			[row(rejected_qty=1, rejected_warehouse=None, rejected_warehouse_kind=None)]
+		)
+
+		self.assertEqual([problem.code for problem in problems], ["PR_REJECTED_WAREHOUSE_REQUIRED"])
+
+	def test_rejected_quantity_only_accepts_a_virtual_warehouse(self):
+		allowed = rules.stock_receipt_problems(
+			[row(rejected_qty=1, rejected_warehouse="V", rejected_warehouse_kind="virtual")]
+		)
+		refused = rules.stock_receipt_problems(
+			[row(rejected_qty=1, rejected_warehouse="P", rejected_warehouse_kind="physical")]
+		)
+
+		self.assertEqual(allowed, ())
+		self.assertEqual(
+			[problem.code for problem in refused],
+			["PR_REJECTED_WAREHOUSE_NOT_VIRTUAL"],
+		)
+
+	def test_transit_is_not_a_rejected_warehouse(self):
+		problems = rules.stock_receipt_problems(
+			[row(rejected_qty=1, rejected_warehouse="T", rejected_warehouse_kind="transit")]
+		)
+
+		self.assertEqual(
+			[problem.code for problem in problems],
+			["PR_REJECTED_WAREHOUSE_NOT_VIRTUAL"],
+		)
+
+	def test_a_zero_quantity_rejected_row_is_still_checked(self):
+		problems = rules.stock_receipt_problems(
+			[row(qty=0, rejected_qty=1, rejected_warehouse="P", rejected_warehouse_kind="physical")]
+		)
+
+		self.assertEqual(
+			[problem.code for problem in problems],
+			["PR_REJECTED_WAREHOUSE_NOT_VIRTUAL"],
+		)
+
+	def test_a_return_still_checks_its_rejected_warehouse(self):
+		problems = rules.stock_receipt_problems(
+			[
+				row(
+					purchase_invoice=None,
+					rejected_qty=1,
+					rejected_warehouse="P",
+					rejected_warehouse_kind="physical",
+				)
+			],
+			invoice_first=False,
+		)
+
+		self.assertEqual(
+			[problem.code for problem in problems],
+			["PR_REJECTED_WAREHOUSE_NOT_VIRTUAL"],
+		)
+
+	def test_non_stock_or_zero_rejected_rows_are_left_to_erpnext(self):
+		self.assertEqual(
+			rules.stock_receipt_problems(
+				[row(is_stock_item=False, rejected_qty=1, rejected_warehouse=None)]
+			),
+			(),
+		)
+		self.assertEqual(
+			rules.stock_receipt_problems(
+				[row(rejected_qty=0, rejected_warehouse=None, rejected_warehouse_kind=None)]
+			),
+			(),
+		)
+
+
 class TestModuleSafety(UnitTestCase):
+	def test_receipt_handler_reads_the_rejected_warehouse_classification(self):
+		source = (APP_ROOT / "purchase" / "receipt.py").read_text(encoding="utf-8")
+
+		self.assertIn("rejected_warehouse_kind", source)
+		self.assertIn("policy.kind", source)
+		self.assertIn("classification.virtual_types()", source)
+
+	def test_receipt_handler_scopes_the_rejected_warehouse_read_to_the_company(self):
+		source = (APP_ROOT / "purchase" / "receipt.py").read_text(encoding="utf-8")
+
+		self.assertIn('"company": doc.company', source)
+
+	def test_receipt_handler_reads_standard_stock_flags_without_the_managed_field(self):
+		"""The managed flag is optional; its absence must not switch the whole handler off."""
+		source = (APP_ROOT / "purchase" / "receipt.py").read_text(encoding="utf-8")
+		body = source.split("def _item_flags", 1)[1].split("def validate_purchase_receipt", 1)[0]
+
+		self.assertIn("fields.append(MANAGED_FIELD)", body)
+		self.assertLess(body.index('"is_stock_item"'), body.index("get_field(MANAGED_FIELD)"))
+
 	def test_new_handlers_do_not_ignore_permissions_or_commit(self):
 		for module in (
 			"purchase/receipt.py",

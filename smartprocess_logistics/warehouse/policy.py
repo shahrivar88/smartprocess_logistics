@@ -8,10 +8,44 @@ server-side handlers in this package enforce the rule.
 
 from dataclasses import dataclass
 
-# The type names that mean "virtual" out of the box. A site can override the list with
-# `sp_virtual_warehouse_types`; a new virtual warehouse is then just a Warehouse with one of
-# these types, not a new configuration entry.
-DEFAULT_VIRTUAL_TYPES = ("Virtual", "مجازی", "Transit")
+PHYSICAL = "physical"
+TRANSIT = "transit"
+VIRTUAL = "virtual"
+
+# Three kinds share two lists. `Virtual` and its Persian name mean "unusable stock" — lost,
+# damaged, warranty, written off; `Transit` means goods on their way. Both are unsellable, which
+# is why `DEFAULT_VIRTUAL_TYPES` still holds the union: every existing sales guard asks one
+# question ("may this supply a sale?") and must keep answering it the same way.
+VIRTUAL_TYPES = ("Virtual", "مجازی")
+TRANSIT_TYPES = ("Transit",)
+
+# A site can override the unsellable list with `sp_virtual_warehouse_types`; a new unsellable
+# warehouse is then just a Warehouse with one of these types, not a new configuration entry.
+#
+# Everything else is physical: an empty type (every warehouse created before this app shipped a
+# type) and the explicit `Physical` type the app now ships (`fixtures/warehouse_type.json`). The
+# rule is a deny-list on purpose — a site that never labels a warehouse keeps its stock
+# sellable, and a label this app has never seen cannot silently make a warehouse unsellable.
+# `Physical` and `فیزیکی` are deliberately absent: they name the physical case.
+DEFAULT_VIRTUAL_TYPES = (*VIRTUAL_TYPES, *TRANSIT_TYPES)
+
+
+def kind(warehouse_type, virtual_types=DEFAULT_VIRTUAL_TYPES):
+	"""Which of the three kinds a standard Warehouse Type means.
+
+	`Transit` is its own kind even though it is also unsellable: an operational report must be
+	able to show goods on their way without calling them lost. A type a site added to
+	`sp_virtual_warehouse_types` is treated as virtual — it is unsellable and this app knows
+	nothing else about it, so it is never counted as usable stock.
+
+	`virtual_types` decides membership and nothing else does. The hardcoded names choose between
+	the two unsellable kinds; they cannot make a type unsellable that the configured list leaves
+	out, because every caller must answer "may this supply a sale?" the same way.
+	"""
+	name = str(warehouse_type or "").strip()
+	if not name or name not in {str(value) for value in (virtual_types or ())}:
+		return PHYSICAL
+	return TRANSIT if name in TRANSIT_TYPES else VIRTUAL
 
 
 @dataclass(frozen=True)
@@ -22,11 +56,8 @@ class Problem:
 
 
 def is_virtual_type(warehouse_type, virtual_types=DEFAULT_VIRTUAL_TYPES):
-	"""Whether a standard Warehouse Type is classified as virtual."""
-	if not warehouse_type:
-		return False
-	allowed = {str(value) for value in (virtual_types or ())}
-	return str(warehouse_type) in allowed
+	"""Whether a standard Warehouse Type is classified as unsellable."""
+	return kind(warehouse_type, virtual_types) != PHYSICAL
 
 
 def stock_entry_problem(purpose, source_virtual, target_virtual, row=None):

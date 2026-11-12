@@ -28,8 +28,11 @@ query per row.
 | Sales Serial Register | one row per serial assignment | which serial was sold on which invoice, and when it was registered | `core.reports.build_register_query` only; no Report document ships, so it is reachable from a future report or a console and from nowhere else |
 | Missing Sales Serials | one row per serial-required invoice item row | which rows still need serials, and how many | ships, as a Script Report with Persian columns and Persian filters |
 
-The app also ships the five approved Logistics reports:
+The app ships six Logistics reports. «تراز موجودی» is the primary operational report; the other
+five remain available:
 
+- **«تراز موجودی»** — physical, Transit and Virtual stock are shown separately. Only physical
+  and Transit count toward operational shortage, so Virtual stock never hides a shortage.
 - `Warehouse Inventory`
 - `Inventory and Procurement Dashboard`
 - `Sales Orders Ready for Invoicing`
@@ -73,6 +76,15 @@ Verified on `SmartProcessERP` (Frappe v16, ERPNext 16.35.0, port 8080) by the da
 and the integration proofs in `docs/test-manifest.md`. See `CHANGELOG.md` for the exact scope,
 known limitations, and future Persian/Jalali filtering work. The existing `v0.5.0` tag remains
 unchanged.
+
+**Unreleased — 2026-10-30.** The development branch contains the report-consolidation,
+weight/volume and purchase-to-stock fixes verified on `SmartProcessERP` (port 8080):
+«تراز موجودی» as the primary operational report, Physical/Transit stock separated with Virtual
+excluded from availability and shortage, the Purchase Receipt weight/volume panel, invoice-first
+receipt validation with a Virtual-only rejected warehouse, and the v16 Dock/apps-screen entry
+beside the legacy Desktop Icon. The branch is committed for review and is not tagged or
+released. The database-free suite passes: 1508 tests, with 2 skipped in the isolated `openpyxl`
+environment and 12 with the system interpreter.
 
 **0.4.0 — a release candidate, not deployed.** It adds the transfer of a cancelled invoice's
 serials onto its amendment, and the three restores (see below). None of it is installed on
@@ -332,13 +344,26 @@ custom arrival API, destination whitelist, purchase-receipt link or new field is
 Virtual stock may only be moved by Material Transfer or received by a standard Purchase Receipt;
 an outbound Sales Invoice or Delivery Note, or a Stock Reservation Entry, that names it is
 refused server-side. The virtual-warehouse guard does not narrow returns; existing managed-
-workflow rules still apply.
+workflow rules still apply. Quotation and Sales Order selectors show physical stock and Transit
+stock separately; Virtual stock is excluded from their availability and warehouse choices.
+Transit is orderable but is not deliverable until a Material Transfer puts it in a physical
+warehouse.
 Purchasing is invoice-first for every domestic and foreign stock purchase: the Purchase Invoice
 bills the full amount with no stock, and every stock row of the Purchase Receipt must link a
-submitted Purchase Invoice. A linked stock row must use the invoice row's UOM and conversion
-factor, so ERPNext's `received_qty` and `per_received` stay consistent. The receipt may receive
-any part of it into a virtual or physical warehouse. Service/non-stock rows, fixed assets and
-opening entries keep their standard workflow.
+submitted Purchase Invoice. The required order is:
+
+1. Submit the Purchase Order (planning only; it does not create stock).
+2. Submit the Purchase Invoice with `update_stock = 0` (billing only; no Stock Ledger Entry).
+3. Submit the Purchase Receipt against that invoice row, in whole or in part. Receipt rows
+   choose the receiving warehouse; a rejected quantity must name a Virtual warehouse.
+4. Move Transit stock to a physical warehouse with a standard Material Transfer before it can
+   be delivered or sold.
+
+A Purchase Receipt without a submitted Purchase Invoice is refused by design; this is not the
+standard ERPNext PO-to-receipt order. A linked stock row must use the invoice row's UOM and
+conversion factor, so ERPNext's `received_qty` and `per_received` stay consistent. The receipt
+may receive any part of it into a virtual or physical warehouse. Service/non-stock rows, fixed
+assets and opening entries keep their standard workflow.
 A Purchase Invoice Return/Debit Note may be financial-only (`update_stock = 0`); stock returns
 must use a Purchase Receipt Return.
 
@@ -670,6 +695,13 @@ pair cannot be edited apart.
 The panel header shows that sidebar's title, and, underneath it, the app's own name, which the
 framework reads from the app data rather than from any field this app owns.
 
+The current development branch adds the v16 app entry: `dock/smartprocess_logistics/` is the
+standard Dock record, and `add_to_apps_screen` in `hooks.py` is the apps-screen hook. The custom
+homepage app on `SmartProcessERP` still renders the legacy icon grid, so
+`desktop_icon/لجستیک.json` remains as a compatibility entry and links the «انبار و خرید»
+Workspace Sidebar. The `SmartProcess Logistics` Sidebar shown with that workspace is also part of
+the app.
+
 ## Approved scope
 
 - Serial registration belongs to `Sales Invoice Item` rows.
@@ -980,6 +1012,27 @@ has not been run; see [Installation](#installation).
 - **A serial that a spreadsheet displays in scientific notation is copied that way.** A numeric
   cell holding fourteen digits may reach the clipboard as `6.95543E+13`; the app stores the text it
   is given, faithfully. Store serial columns as **text** in the workbook.
+- **The custom homepage app is not Frappe 16.53 compatible.** `smartprocee_erpnext_homepage`
+  imports `get_sidebar_items` from `frappe.boot`, which this Frappe version no longer exports, so
+  `get_bootinfo` fails for non-Administrator users. It is a separate app and was not modified.
+  The standard v16 Dock/apps-screen entry and the legacy Desktop Icon ship alongside it.
+- **Purchase serial tracking is not implemented.** Serial capture and movement remain
+  Sales-Invoice-side only; Purchase Receipt, warehouse transfer, sales and warranty are not yet
+  connected into one purchase-serial flow.
+- **A submitted Purchase Invoice can be cancelled under a submitted Purchase Receipt.** ERPNext's
+  `Purchase Invoice.on_cancel` does not look for receipts that name the invoice, and this app adds
+  no guard of its own. The invoice-first rule is checked when the receipt is submitted; nothing
+  keeps it true afterwards. Cancelling the invoice is a deliberate operator action that leaves the
+  receipt standing, and no automatic repair is attempted.
+- **The Purchase Receipt weight/volume panel is verified server-side, not visually.** Its
+  endpoint and calculations are tested, but the Desk panel has not been accepted in a real
+  browser.
+- **`sp_virtual_stock_covers_procurement` is retained for compatibility.** The calculation no
+  longer reads it and Virtual stock never covers operational shortage; the field remains until a
+  separate removal is approved.
+- **Purchase Invoice GL issues are outside this app.** Zero-value journal rows and unbalanced
+  Journal Entry attempts belong to the Accounting project; this app does not change ledger
+  behaviour.
 
 ## Troubleshooting
 
@@ -1015,14 +1068,19 @@ installed anywhere:
 python -m unittest discover -s smartprocess_logistics/tests -t .
 ```
 
-That command skips **seven** tests, all of them because the reader needs `openpyxl` and the system
-interpreter does not have it. Run the same command with an interpreter that has `openpyxl` — the
-repository's isolated environment, or any environment where the app's own dependency is installed —
-to execute them:
+That command skips **twelve** tests: eleven because the reader needs `openpyxl` and the system
+interpreter does not have it, and one because the development commitment composition is not part
+of this build. Run the same command with an interpreter that has `openpyxl` — the repository's
+isolated environment, or any environment where the app's own dependency is installed — to
+execute them:
 
 ```bash
 .venv/Scripts/python.exe -m unittest discover -s smartprocess_logistics/tests -t .
 ```
+
+The current suite result is **1508 tests, OK**: 12 skipped with the system interpreter, and 2
+skipped with the isolated environment (the commitment composition, and the missing-library path
+that is unreachable when `openpyxl` is installed).
 
 Between the two runs every test runs, with one exception: `TestTheOperatorsWorkbook` reads the
 operator's own `~/Desktop/01.xlsx` and skips when it is not there. It is an **optional** check on

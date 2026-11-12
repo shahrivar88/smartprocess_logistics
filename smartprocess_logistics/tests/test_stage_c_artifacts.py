@@ -9,6 +9,9 @@ from smartprocess_logistics.tests.base import UnitTestCase
 APP = pathlib.Path(__file__).resolve().parent.parent
 MODULE = APP / "smartprocess_logistics"
 REPORT_DIR = MODULE / "report"
+OPERATIONAL_REPORT = "تراز موجودی"
+OPERATIONAL_REPORT_SCRUB = "تراز_موجودی"
+OPERATIONAL_REPORT_DIR = REPORT_DIR / OPERATIONAL_REPORT_SCRUB
 
 
 def source(path):
@@ -23,7 +26,8 @@ class TestSalesEndpoints(UnitTestCase):
 		self.assertIn('query_filters = {"is_sales_item": 1}', text)
 		self.assertIn("items_for_sales_invoice", text)
 		self.assertIn("items_for_sales_order", text)
-		self.assertIn("include_virtual", text)
+		self.assertIn("include_transit=False", text)
+		self.assertEqual(text.count("include_transit=True"), 2)
 
 	def test_physical_warehouse_query_uses_permission_aware_get_list(self):
 		text = source(APP / "warehouse" / "physical_warehouse_query.py")
@@ -192,13 +196,14 @@ class TestStockVisibilitySettings(UnitTestCase):
 		self.assertIn("field.default", text)
 		self.assertIn("field is None", text)
 
-	def test_the_boot_payload_carries_the_switches(self):
+	def test_no_switch_is_decided_from_the_cached_boot_payload(self):
+		"""`frappe.boot` is cached per session, so a saved switch would read as it was before the save."""
 		hooks = source(APP / "hooks.py")
 
-		self.assertIn('boot_session = "smartprocess_logistics.boot.boot_session"', hooks)
-		self.assertIn("/assets/smartprocess_logistics/js/visibility.js", hooks)
-		self.assertTrue((APP / "boot.py").exists())
-		self.assertTrue((APP / "public" / "js" / "visibility.js").exists())
+		self.assertNotIn("boot_session", hooks)
+		self.assertNotIn("visibility.js", hooks)
+		self.assertFalse((APP / "boot.py").exists())
+		self.assertFalse((APP / "public" / "js" / "visibility.js").exists())
 
 	def test_each_document_reads_its_own_switches(self):
 		item_search = source(APP / "warehouse" / "sales_item_search.py")
@@ -229,15 +234,16 @@ class TestStockVisibilitySettings(UnitTestCase):
 		for endpoint in ("quotation_warehouses", "sales_order_warehouses"):
 			with self.subTest(endpoint=endpoint):
 				self.assertIn(f"def {endpoint}(", text)
-		self.assertEqual(text.count("physical_only=False"), 2)
+		self.assertEqual(text.count("exclude_virtual=True"), 2)
 
-	def test_a_virtual_warehouse_is_labelled_where_a_selector_offers_it(self):
-		"""It is a real warehouse with real stock, but it cannot supply a sale."""
+	def test_the_description_line_is_the_stock_and_nothing_else(self):
+		"""The Link draws the warehouse name as its value; a second copy on the line below is noise."""
 		text = source(APP / "warehouse" / "physical_warehouse_query.py")
 
-		self.assertIn('VIRTUAL_ROW_LABEL = "انبار مجازی"', text)
-		self.assertIn("def _warehouse_label(", text)
-		self.assertIn("warehouse_type", text)
+		self.assertNotIn("_warehouse_label", text)
+		self.assertIn('fields=["name", "warehouse_type"]', text)
+		self.assertIn("return [(name,) for name in names]", text)
+		self.assertIn("sales_visibility.warehouse_stock_text(stock.get(name, 0), kinds.get(name))", text)
 
 	def test_only_the_quotation_endpoint_is_new_in_the_item_search(self):
 		text = source(APP / "warehouse" / "sales_item_search.py")
@@ -251,18 +257,155 @@ class TestStockVisibilitySettings(UnitTestCase):
 		self.assertIn('"Quotation": "public/js/quotation_stock_visibility.js"', hooks)
 		self.assertIn("sales_order_stock_visibility.js", hooks)
 
-	def test_every_form_asks_the_shared_switch_reader(self):
-		for name in (
-			"sales_invoice_warehouse_stock.js",
-			"quotation_stock_visibility.js",
-			"sales_order_stock_visibility.js",
+	def test_every_form_asks_its_query_without_deciding_anything_itself(self):
+		"""The server reads the switches per request; a client-side gate would answer from boot."""
+		for name, fieldname in (
+			("sales_invoice_warehouse_stock.js", "physical_warehouses"),
+			("quotation_stock_visibility.js", "quotation_warehouses"),
+			("sales_order_stock_visibility.js", "sales_order_warehouses"),
 		):
 			text = source(APP / "public" / "js" / name)
 
 			with self.subTest(script=name):
-				self.assertIn("smartprocess_logistics.visibility", text)
-				self.assertIn(".enabled(", text)
+				self.assertIn(fieldname, text)
+				self.assertNotIn("frappe.boot", text)
+				self.assertNotIn(".enabled(", text)
+				self.assertNotIn("sp_show_", text)
 				self.assertNotIn("ignore_permissions", text)
+
+	def test_the_sales_invoice_script_has_no_switch_names_left(self):
+		text = source(APP / "public" / "js" / "sales_invoice_warehouse_stock.js")
+
+		for name in ("sp_si_physical_warehouses_only", "sp_show_warehouse_stock_in_selector"):
+			self.assertNotIn(name, text)
+
+	def test_the_sales_invoice_view_filters_reach_the_server(self):
+		items = source(APP / "warehouse" / "sales_item_search.py")
+		warehouses = source(APP / "warehouse" / "physical_warehouse_query.py")
+
+		self.assertIn('values.get("hide_zero_stock")', items)
+		self.assertIn("selection_filters.keep_item", items)
+		self.assertIn('values.get("hide_empty")', warehouses)
+		self.assertIn("selection_filters.keep_warehouse", warehouses)
+
+	def test_an_unreadable_stock_figure_filters_nothing(self):
+		"""`None` is "not answered": hiding every row because stock is unseen is worse than showing it."""
+		items = source(APP / "warehouse" / "sales_item_search.py")
+		warehouses = source(APP / "warehouse" / "physical_warehouse_query.py")
+
+		self.assertIn("if stock is not None and not selection_filters.keep_item", items)
+		self.assertIn("if stock is not None:", warehouses)
+		self.assertIn("stock = _stock_by_warehouse(company, [row.get(\"name\") for row in rows], item_code)", warehouses)
+
+	def test_the_form_sends_both_filters_and_never_edits_a_value(self):
+		text = source(APP / "public" / "js" / "sales_invoice_warehouse_stock.js")
+
+		self.assertIn('"hide_zero_stock"', text)
+		self.assertIn('"hide_empty"', text)
+		self.assertIn("localStorage", text)
+		self.assertIn("عدم نمایش کالاهای بدون موجودی", text)
+		self.assertIn("عدم نمایش انبارهای بدون موجودی کالای انتخاب‌شده", text)
+		self.assertIn("=== true", text, "a missing preference must read as off")
+		self.assertIn("sp-si-stock-filters", text, "the bar is rendered once per form")
+		self.assertNotIn("set_value(", text)
+		self.assertNotIn("clear_table", text)
+
+
+class TestOperationalReport(UnitTestCase):
+	"""«تراز موجودی» and the billing panel that feeds it."""
+
+	def report_py(self):
+		return source(OPERATIONAL_REPORT_DIR / f"{OPERATIONAL_REPORT_SCRUB}.py")
+
+	def test_the_report_is_a_script_report_on_item(self):
+		doc = json.loads((OPERATIONAL_REPORT_DIR / f"{OPERATIONAL_REPORT_SCRUB}.json").read_text(encoding="utf-8"))
+
+		self.assertEqual(doc["name"], OPERATIONAL_REPORT)
+		self.assertEqual(doc["report_name"], OPERATIONAL_REPORT)
+		self.assertEqual(doc["report_type"], "Script Report")
+		self.assertEqual(doc["ref_doctype"], "Item")
+
+	def test_the_columns_keep_physical_and_transit_apart(self):
+		text = self.report_py()
+
+		for label in (
+			"موجودی قابل فروش",
+			"موجودی قابل سفارش",
+			"پیش‌فاکتورهای باز",
+			"سفارشات فروش باز",
+			"کل تقاضا",
+			"کسری سفارش",
+			"سفارش خرید باز",
+			"پیشنهاد خرید",
+			"پیش‌فاکتورهای مرتبط",
+			"سفارشات فروش مرتبط",
+		):
+			with self.subTest(label=label):
+				self.assertIn(label, text)
+
+	def test_the_shortage_never_consults_purchase_orders(self):
+		fulfilment = source(APP / "core" / "fulfilment.py")
+		body = fulfilment.split("def fulfilment_rows", 1)[1]
+
+		self.assertIn("order_shortage(demand, item_stock.physical, item_stock.transit)", body)
+		self.assertNotIn("order_shortage(demand, item_stock.physical, supply", body)
+
+		report_data = source(APP / "warehouse" / "report_data.py")
+		operational = report_data.split("def operational_fulfilment_rows", 1)[1].split(
+			"def _filter_items", 1
+		)[0]
+		self.assertIn("_purchase_order_data", operational)
+		self.assertIn("purchase_supply_by_item=purchase_supply", operational)
+		self.assertIn("open_purchase_supply", operational)
+		self.assertIn("suggested_purchase", operational)
+
+	def test_the_report_reuses_the_shared_layers(self):
+		text = source(APP / "warehouse" / "report_data.py")
+		body = text.split("def operational_fulfilment_rows", 1)[1].split("def _filter_items", 1)[0]
+
+		self.assertIn("fulfilment.stock_by_item", body)
+		self.assertIn("classification.virtual_types()", body)
+		self.assertIn("quotation_data", body)
+		self.assertIn("sales_order_data", body)
+		self.assertIn("procurement.open_delivery_demand_by_item", body)
+		self.assertIn("operational_fulfilment_rows", self.report_py())
+
+	def test_the_hide_zero_filter_reaches_the_server(self):
+		report_js = source(OPERATIONAL_REPORT_DIR / f"{OPERATIONAL_REPORT_SCRUB}.js")
+		report_data = source(APP / "warehouse" / "report_data.py")
+
+		self.assertIn('fieldname: "hide_zero"', report_js)
+		self.assertIn("عدم نمایش اقلام صفر", report_js)
+		self.assertIn("default: 0", report_js)
+		self.assertIn('("hide_zero")', report_data)
+		self.assertIn("hide_zero=bool(", report_data)
+
+	def test_the_report_draws_related_documents_as_links(self):
+		text = source(OPERATIONAL_REPORT_DIR / f"{OPERATIONAL_REPORT_SCRUB}.js")
+
+		self.assertIn('fieldname: "only_shortage"', text)
+		self.assertIn("formatter", text)
+		self.assertIn("get_form_link", text)
+		self.assertIn('"Sales Order"', text)
+		self.assertIn('"Quotation"', text)
+
+	def test_the_billing_panel_shows_status_totals_and_invoice_links(self):
+		progress = source(APP / "warehouse" / "sales_order_progress.py")
+		panel = source(APP / "public" / "js" / "sales_order_stock_visibility.js")
+
+		self.assertIn("operational_status", progress)
+		self.assertIn("contributes_to_demand", progress)
+		self.assertIn("invoices_by_so_detail", progress)
+		self.assertIn("_totals", progress)
+		self.assertIn("operational_status", panel)
+		self.assertIn("در تقاضای عملیاتی", panel)
+		self.assertIn("tfoot", panel)
+		self.assertIn('get_form_link("Sales Invoice"', panel)
+		self.assertIn("filtered_children", panel)
+		self.assertIn(
+			"erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice", panel
+		)
+		self.assertNotIn("ignore_permissions", progress + panel)
 
 
 class TestReports(UnitTestCase):
@@ -287,14 +430,17 @@ class TestReports(UnitTestCase):
 		)
 
 	def test_every_report_has_a_company_filter(self):
+		reports_with_a_company_filter = {
+			"Warehouse Inventory",
+			"Inventory and Procurement Dashboard",
+			"Sales Orders Ready for Invoicing",
+			"Procurement Shortage",
+			"Item Weight and Volume",
+			OPERATIONAL_REPORT,
+		}
+
 		for path, doc in self.report_docs():
-			if doc["name"] not in {
-				"Warehouse Inventory",
-				"Inventory and Procurement Dashboard",
-				"Sales Orders Ready for Invoicing",
-				"Procurement Shortage",
-				"Item Weight and Volume",
-			}:
+			if doc["name"] not in reports_with_a_company_filter:
 				continue
 
 			js = path.with_suffix(".js").read_text(encoding="utf-8")
@@ -340,6 +486,7 @@ class TestReports(UnitTestCase):
 				"Purchase Invoice",
 				{"Purchase User", "Accounts User", "Accounts Manager"},
 			),
+			OPERATIONAL_REPORT: ("Item", {"Stock User"}),
 		}
 		docs = {doc["name"]: doc for _path, doc in self.report_docs()}
 
@@ -348,6 +495,23 @@ class TestReports(UnitTestCase):
 				doc = docs[name]
 				self.assertEqual(doc["ref_doctype"], ref_doctype)
 				self.assertEqual({row["role"] for row in doc["roles"]}, roles)
+
+
+class TestProcurementReport(UnitTestCase):
+	def test_it_shows_transit_and_never_virtual_as_supply(self):
+		text = source(
+			MODULE / "report" / "procurement_shortage" / "procurement_shortage.py"
+		)
+
+		self.assertIn('"fieldname": "transit_stock"', text)
+		self.assertNotIn('"fieldname": "virtual_stock"', text)
+
+	def test_the_report_uses_the_shared_operational_rows(self):
+		text = source(APP / "warehouse" / "report_data.py")
+		body = text.split("def procurement_shortage_rows", 1)[1].split("def ready_invoicing_rows", 1)[0]
+
+		self.assertIn("fulfilment.stock_by_item", body)
+		self.assertIn("transit_by_item=transit_by_item", body)
 
 
 class TestWorkspaceAndHooks(UnitTestCase):
@@ -360,10 +524,9 @@ class TestWorkspaceAndHooks(UnitTestCase):
 			links,
 			{
 				"Warehouse Inventory",
-				"Inventory and Procurement Dashboard",
 				"Sales Orders Ready for Invoicing",
-				"Procurement Shortage",
 				"Item Weight and Volume",
+				OPERATIONAL_REPORT,
 			},
 		)
 

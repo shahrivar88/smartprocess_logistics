@@ -5,7 +5,7 @@ module only joins their results into report rows. It has no Frappe import, so th
 modules can be thin and the row arithmetic can be tested without a site.
 """
 
-from smartprocess_logistics.core import inventory, measurements, procurement
+from smartprocess_logistics.core import fulfilment, inventory, measurements, procurement
 from smartprocess_logistics.core.inventory import ItemStock, max_zero, quantity
 from smartprocess_logistics.warehouse.policy import DEFAULT_VIRTUAL_TYPES, is_virtual_type
 
@@ -64,18 +64,26 @@ def _allocated_physical_by_item(lines, stock_by_item, company, strategy):
 
 
 def _metric_row(
-	company, item_code, stock, demand, allocated, open_supply, *, virtual_covers, net_open_supply
+	company,
+	item_code,
+	stock,
+	demand,
+	allocated,
+	open_supply,
+	*,
+	transit=0,
+	net_open_supply,
 ):
 	physical = stock.physical
-	virtual = stock.virtual
+	transit = quantity(transit)
+	# `ItemStock.virtual` is the app's legacy non-physical bucket: Transit plus Virtual. The
+	# operational row keeps them apart so a dashboard cannot present unusable stock as supply.
+	virtual = quantity(max_zero(stock.virtual - transit))
 	available = inventory.available_for_new_sales(stock, allocated)
 	immediate = quantity(max_zero(demand - physical))
-	shortage = procurement.procurement_shortage(
-		demand,
-		physical,
-		virtual,
-		virtual_stock_covers=virtual_covers,
-	)
+	# An operational shortage is covered by physical and transit stock only. Virtual stock is
+	# real inventory but is never usable for demand, so it cannot reduce this figure.
+	shortage = fulfilment.order_shortage(demand, physical, transit)
 	recommended = procurement.recommended_purchase(
 		shortage,
 		open_supply,
@@ -86,8 +94,9 @@ def _metric_row(
 		"company": company,
 		"item_code": item_code,
 		"physical_stock": quantity(physical),
+		"transit_stock": transit,
 		"virtual_stock": quantity(virtual),
-		"total_stock": quantity(physical + virtual),
+		"total_stock": quantity(physical + transit + virtual),
 		"open_demand": quantity(demand),
 		"physically_deliverable": quantity(physical),
 		"available_for_new_sales": available,
@@ -104,14 +113,21 @@ def inventory_dashboard_rows(
 	lines,
 	open_purchase_supply_by_item,
 	*,
+	transit_by_item=None,
 	strategy=inventory.DEFAULT_ALLOCATION_STRATEGY,
-	virtual_stock_covers=True,
 	net_open_supply=True,
 ):
-	"""One row per Item for the inventory/procurement dashboard."""
+	"""One row per Item for the inventory/procurement dashboard.
+
+	`transit_by_item` is the orderable-but-not-yet-available quantity. Virtual stock never
+	enters the operational shortage.
+	"""
+	transit_by_item = transit_by_item or {}
 	demand = procurement.open_delivery_demand_by_item(lines, company)
 	allocated = _allocated_physical_by_item(lines, stock_by_item, company, strategy)
-	codes = sorted(set(stock_by_item) | set(demand) | set(open_purchase_supply_by_item))
+	codes = sorted(
+		set(stock_by_item) | set(demand) | set(open_purchase_supply_by_item) | set(transit_by_item)
+	)
 	result = []
 
 	for item_code in codes:
@@ -124,7 +140,7 @@ def inventory_dashboard_rows(
 				demand.get(item_code, inventory.ZERO),
 				allocated.get(item_code, inventory.ZERO),
 				open_purchase_supply_by_item.get(item_code, inventory.ZERO),
-				virtual_covers=virtual_stock_covers,
+				transit=transit_by_item.get(item_code, inventory.ZERO),
 				net_open_supply=net_open_supply,
 			)
 		)
@@ -138,9 +154,9 @@ def procurement_shortage_rows(
 	lines,
 	open_purchase_supply_by_item,
 	*,
+	transit_by_item=None,
 	related_orders=None,
 	strategy=inventory.DEFAULT_ALLOCATION_STRATEGY,
-	virtual_stock_covers=True,
 	net_open_supply=True,
 ):
 	"""One row per Item with the demand, supply and recommended purchase transparently shown."""
@@ -150,8 +166,8 @@ def procurement_shortage_rows(
 		stock_by_item,
 		lines,
 		open_purchase_supply_by_item,
+		transit_by_item=transit_by_item,
 		strategy=strategy,
-		virtual_stock_covers=virtual_stock_covers,
 		net_open_supply=net_open_supply,
 	)
 
@@ -242,6 +258,7 @@ def weight_volume_row(
 	measurement=None,
 	native_net_weight=None,
 	native_weight_uom=None,
+	net_available=True,
 	gross_available=False,
 	volume_available=False,
 	measurement_source=None,
@@ -250,7 +267,8 @@ def weight_volume_row(
 
 	`native_net_weight` is the standard transaction-row snapshot. Gross weight and volume are
 	only returned when the caller says the corresponding historical values exist; otherwise
-	they are `None` and the source column says why.
+	they are `None` and the source column says why. `net_available=False` keeps a missing
+	measurement missing instead of turning it into an entered zero.
 	"""
 	quantity_stock_uom = quantity(quantity_stock_uom)
 	net = quantity(native_net_weight) if native_net_weight is not None else None
@@ -263,7 +281,7 @@ def weight_volume_row(
 
 	if measurement is not None:
 		totals = measurements.totals(quantity_stock_uom, measurement)
-		if net is None:
+		if net is None and net_available:
 			net = totals.net_weight
 			net_source = measurement.source
 		weight_uom = weight_uom or totals.weight_uom

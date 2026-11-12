@@ -434,3 +434,52 @@ class TestReadyForInvoicing(UnitTestCase):
 
 		self.assertEqual(physical, {"ITEM": 10})
 		self.assertEqual(virtual, {"ITEM": 5})
+
+
+class TestOperationalStatus(UnitTestCase):
+	"""The derived status model: native fields in, one label out, nothing stored."""
+
+	def test_the_six_states(self):
+		self.assertEqual(planning.operational_status(0, "Draft"), planning.ORDER_OPEN)
+		self.assertEqual(planning.operational_status(1, "To Deliver and Bill", 0, 0), planning.ORDER_OPEN)
+		self.assertEqual(planning.operational_status(1, "To Deliver", 0, 40), planning.ORDER_PARTIALLY_INVOICED)
+		self.assertEqual(
+			planning.operational_status(1, "To Bill", 50, 0), planning.ORDER_PARTIALLY_DELIVERED
+		)
+		self.assertEqual(
+			planning.operational_status(1, "To Bill", 100, 0), planning.ORDER_FULLY_DELIVERED
+		)
+		self.assertEqual(planning.operational_status(1, "Closed", 40, 40), planning.ORDER_CLOSED)
+		self.assertEqual(planning.operational_status(2, "Cancelled"), planning.ORDER_CANCELLED)
+
+	def test_delivery_outranks_billing(self):
+		""""Partially delivered" is about goods, so it wins over a billing figure."""
+		self.assertEqual(
+			planning.operational_status(1, "To Bill", 60, 100), planning.ORDER_PARTIALLY_DELIVERED
+		)
+		self.assertEqual(
+			planning.operational_status(1, "To Bill", 100, 20), planning.ORDER_FULLY_DELIVERED
+		)
+
+	def test_on_hold_and_stopped_are_closed_not_cancelled(self):
+		for status in ("On Hold", "Stopped"):
+			with self.subTest(status=status):
+				self.assertEqual(planning.operational_status(1, status, 0, 0), planning.ORDER_CLOSED)
+
+	def test_missing_percentages_read_as_not_filled(self):
+		self.assertEqual(planning.operational_status(1, "To Deliver and Bill"), planning.ORDER_OPEN)
+		self.assertEqual(planning.operational_status(1, "To Deliver and Bill", "0", ""), planning.ORDER_OPEN)
+
+	def test_a_cancelled_status_beats_a_submitted_docstatus(self):
+		self.assertEqual(planning.operational_status(1, "Cancelled", 0, 0), planning.ORDER_CANCELLED)
+
+
+class TestDemandContribution(UnitTestCase):
+	def test_only_an_open_order_with_a_delivery_balance_contributes(self):
+		self.assertTrue(planning.contributes_to_demand(1, "To Deliver and Bill", 0))
+		self.assertTrue(planning.contributes_to_demand(1, "To Bill", 40))
+		self.assertFalse(planning.contributes_to_demand(1, "To Bill", 100))
+		self.assertFalse(planning.contributes_to_demand(1, "Closed", 10))
+		self.assertFalse(planning.contributes_to_demand(1, "On Hold", 10))
+		self.assertFalse(planning.contributes_to_demand(2, "Cancelled", 10))
+		self.assertFalse(planning.contributes_to_demand(0, "Draft", 0))

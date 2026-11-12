@@ -13,12 +13,21 @@ import frappe
 from frappe.utils import date_diff, today
 
 from smartprocess_logistics.api.gateway import FrappeGateway
-from smartprocess_logistics.core import authz, inventory, measurements, procurement, reporting
-from smartprocess_logistics.warehouse import classification, policies
+from smartprocess_logistics.core import (
+	authz,
+	fulfilment,
+	inventory,
+	measurement_totals,
+	measurements,
+	procurement,
+	reporting,
+)
+from smartprocess_logistics.warehouse import classification, measurement_summary, policies
 
 ITEM_READ = "Item"
 WAREHOUSE = "Warehouse"
 SALES_ORDER = "Sales Order"
+QUOTATION = "Quotation"
 PURCHASE_ORDER = "Purchase Order"
 SALES_INVOICE = "Sales Invoice"
 
@@ -373,7 +382,9 @@ def inventory_procurement_rows(company, filters, *, strategy=None):
 	policy = policies.inventory_policy()
 	strategy = strategy or policy.allocation_priority
 	warehouses = _warehouses(company, filters)
-	_bins, _rows, stock = _warehouse_stock(company, warehouses)
+	bins, _rows, stock = _warehouse_stock(company, warehouses)
+	operational = fulfilment.stock_by_item(bins, classification.virtual_types())
+	transit_by_item = {code: value.transit for code, value in operational.items()}
 	sales_rows, _metadata, _reviews, _available = sales_order_data(company, filters)
 	_po_lines, _po_metadata, po_supply = _purchase_order_data(company, filters)
 	rows = reporting.inventory_dashboard_rows(
@@ -381,8 +392,8 @@ def inventory_procurement_rows(company, filters, *, strategy=None):
 		stock,
 		sales_rows,
 		po_supply,
+		transit_by_item=transit_by_item,
 		strategy=strategy,
-		virtual_stock_covers=policy.virtual_stock_covers_procurement,
 		net_open_supply=policy.recommended_purchase_net_of_open_po,
 	)
 	return _filter_items(rows, filters)
@@ -393,7 +404,9 @@ def procurement_shortage_rows(company, filters, *, strategy=None):
 	policy = policies.inventory_policy()
 	strategy = strategy or policy.allocation_priority
 	warehouses = _warehouses(company, filters)
-	_bins, _rows, stock = _warehouse_stock(company, warehouses)
+	bins, _rows, stock = _warehouse_stock(company, warehouses)
+	operational = fulfilment.stock_by_item(bins, classification.virtual_types())
+	transit_by_item = {code: value.transit for code, value in operational.items()}
 	sales_rows, _metadata, _reviews, _available = sales_order_data(company, filters)
 	_po_lines, _po_metadata, po_supply = _purchase_order_data(company, filters)
 	related = {}
@@ -405,9 +418,9 @@ def procurement_shortage_rows(company, filters, *, strategy=None):
 		stock,
 		sales_rows,
 		po_supply,
+		transit_by_item=transit_by_item,
 		related_orders={key: tuple(value) for key, value in related.items()},
 		strategy=strategy,
-		virtual_stock_covers=policy.virtual_stock_covers_procurement,
 		net_open_supply=policy.recommended_purchase_net_of_open_po,
 	)
 	return _filter_items(rows, filters)
@@ -443,6 +456,135 @@ def ready_invoicing_rows(company, filters, *, strategy=None):
 			"مقدار فاکتورشده برای نقش شما در دسترس نیست؛ ستون‌های فاکتور خالی‌اند و وضعیت فقط بر اساس موجودی است.",
 		)
 	return _filter_items(rows, filters)
+
+
+def quotation_data(company, filters):
+	"""Submitted Quotation Item rows of one company, with the quantity already ordered from each.
+
+	A conversion to a Sales Order writes the converted quantity into `ordered_qty` (ERPNext's own
+	status updater, in Stock UOM, reversed when the Sales Order is cancelled). That figure is what
+	keeps the converted part out of this report's demand.
+	"""
+	_require_read(QUOTATION, "برای اجرای این گزارش، دسترسی خواندن پیش‌فاکتور لازم است.")
+
+	parents = _bounded(
+		frappe.get_list(
+			QUOTATION,
+			filters={
+				"company": company,
+				"docstatus": 1,
+				**_date_filters(filters, "transaction_date"),
+			},
+			fields=["name", "status", "valid_till", "transaction_date"],
+			limit_page_length=MAX_REPORT_ROWS + 1,
+		),
+		"پیش‌فاکتور",
+	)
+	parent_map = {row.get("name"): row for row in parents}
+	if not parent_map:
+		return []
+
+	items = _bounded(
+		frappe.get_all(
+			"Quotation Item",
+			filters={"parent": ("in", tuple(parent_map))},
+			fields=[
+				"name",
+				"parent",
+				"item_code",
+				"qty",
+				"stock_qty",
+				"ordered_qty",
+				"conversion_factor",
+			],
+			limit_page_length=MAX_REPORT_ROWS + 1,
+		),
+		"ردیف پیش‌فاکتور",
+	)
+
+	lines = []
+	for row in items:
+		parent = parent_map.get(row.get("parent")) or {}
+		lines.append(
+			fulfilment.QuotationLine(
+				name=row.get("name") or "",
+				quotation=row.get("parent") or "",
+				company=company,
+				item_code=row.get("item_code") or "",
+				qty=row.get("qty"),
+				stock_qty=row.get("stock_qty"),
+				ordered_qty=row.get("ordered_qty"),
+				conversion_factor=row.get("conversion_factor") or 1,
+				status=parent.get("status") or "",
+				docstatus=1,
+				valid_till=parent.get("valid_till"),
+			)
+		)
+
+	return lines
+
+
+def operational_fulfilment_rows(company, filters):
+	"""Rows for «تراز موجودی».
+
+	The warehouse filter narrows the **stock** side, like the other inventory reports; demand is
+	company-wide because a Sales Order line is not tied to the warehouse being inspected. Virtual
+	warehouses never reach this function's totals. Open Purchase Orders are read only for the
+	«سفارش خرید باز» and «پیشنهاد خرید» columns: they never change the shortage.
+	"""
+	policy = policies.inventory_policy()
+	warehouses = _warehouses(company, filters)
+	bins, _rows, _stock = _warehouse_stock(company, warehouses)
+	stock = fulfilment.stock_by_item(bins, classification.virtual_types())
+
+	quote_lines = quotation_data(company, filters)
+	sales_lines, _metadata, _reviews, _available = sales_order_data(company, filters)
+	sales_order_demand = procurement.open_delivery_demand_by_item(sales_lines, company)
+	sales_orders_by_item = {}
+	for line in sales_lines:
+		if procurement.open_delivery_demand(line) > inventory.ZERO:
+			sales_orders_by_item.setdefault(line.item_code, set()).add(line.sales_order)
+
+	_purchase_lines, _purchase_metadata, purchase_supply = _purchase_order_data(company, filters)
+
+	rows = fulfilment.fulfilment_rows(
+		company,
+		stock,
+		quote_lines,
+		sales_order_demand,
+		sales_orders_by_item=sales_orders_by_item,
+		purchase_supply_by_item=purchase_supply,
+		today=today(),
+		only_shortage=bool((filters or {}).get("only_shortage")),
+		hide_zero=bool((filters or {}).get("hide_zero")),
+		net_open_supply=policy.recommended_purchase_net_of_open_po,
+	)
+
+	details = _item_details({row.item_code for row in rows})
+	result = []
+	for row in rows:
+		detail = details.get(row.item_code) or {}
+		result.append(
+			{
+				"company": row.company,
+				"item_code": row.item_code,
+				"item_name": detail.get("item_name") or "",
+				"item_group": detail.get("item_group") or "",
+				"stock_uom": detail.get("stock_uom") or "",
+				"physical_stock": row.physical,
+				"transit_stock": row.transit,
+				"quotation_demand": row.quotation_demand,
+				"sales_order_demand": row.sales_order_demand,
+				"total_demand": row.total_demand,
+				"shortage": row.shortage,
+				"open_purchase_supply": row.open_purchase_supply,
+				"suggested_purchase": row.suggested_purchase,
+				"related_quotations": ", ".join(row.related_quotations),
+				"related_sales_orders": ", ".join(row.related_sales_orders),
+			}
+		)
+
+	return _filter_items(result, filters)
 
 
 def _filter_items(rows, filters):
@@ -488,49 +630,194 @@ def _measurement(row, source=measurements.HISTORICAL):
 	)
 
 
+def _summary_row(
+	totals,
+	*,
+	document_type,
+	document,
+	posting_date,
+	party,
+	cargo_ref,
+	item_label,
+	extra_warnings=(),
+):
+	issues = measurement_summary.warnings(totals, extra_warnings)
+	net_source = (
+		"document_total"
+		if totals.net_by_uom and not totals.net_missing and not totals.unresolved_uoms
+		else "document_partial"
+	)
+	gross_source = (
+		"document_total"
+		if totals.gross_by_uom and not totals.gross_missing and not totals.unresolved_uoms
+		else "document_partial"
+	)
+	volume_source = (
+		"document_total"
+		if totals.volume_cm3 is not None and not totals.volume_missing
+		else "document_partial"
+	)
+	source = "document_total" if totals.complete else "document_partial"
+
+	return {
+		"row_type": "جمع سند",
+		"document_type": document_type,
+		"document": document,
+		"posting_date": posting_date,
+		"party": party or "",
+		"cargo_ref": cargo_ref or "",
+		"item_code": "",
+		"item_name": item_label,
+		"quantity": None,
+		"net_weight": totals.net_total,
+		"gross_weight": totals.gross_total,
+		"volume_cm3": totals.volume_cm3,
+		"volume_m3": totals.volume_m3,
+		"weight_uom": totals.weight_uom or "",
+		"net_source": net_source,
+		"gross_source": gross_source,
+		"volume_source": volume_source,
+		"measurement_source": source,
+		"rejected_qty": None,
+		"rejected_net_weight": totals.rejected_net_total,
+		"rejected_gross_weight": totals.rejected_gross_total,
+		"rejected_volume_cm3": totals.rejected_volume_cm3,
+		"rejected_volume_m3": totals.rejected_volume_m3,
+		"rows_count": totals.rows,
+		"coverage": measurement_summary.coverage_text(totals),
+		"warning": "؛ ".join(issues),
+	}
+
+
+def _with_document_summaries(
+	details, lines_by_document, metadata, *, target_uom, extra_warnings=()
+):
+	converter = measurement_summary.make_converter()
+	result = []
+	by_document = {}
+	for detail in details:
+		by_document.setdefault(detail["document"], []).append(detail)
+
+	for document in sorted(by_document):
+		totals = measurement_totals.document_totals(
+			document,
+			lines_by_document.get(document, ()),
+			target_uom=target_uom,
+			convert=converter,
+		)
+		info = metadata.get(document, {})
+		result.append(
+			_summary_row(
+				totals,
+				document_type=info.get("document_type", ""),
+				document=document,
+				posting_date=info.get("posting_date"),
+				party=info.get("party"),
+				cargo_ref=info.get("cargo_ref"),
+				item_label=info.get("item_label", "جمع سند"),
+				extra_warnings=extra_warnings,
+			)
+		)
+		result.extend(
+			sorted(
+				by_document[document],
+				key=lambda row: (row.get("_idx") or 0, row.get("item_code") or ""),
+			)
+		)
+
+	return result
+
+
 def weight_volume_rows(company, filters):
-	"""Rows for Item Weight and Volume, for one source at a time."""
+	"""Rows for Item Weight and Volume, with one summary row per document.
+
+	The summary is computed over every row of the document; item and item-group filters narrow
+	only the detail rows, and the summary says so when such a filter is active.
+	"""
 	source = str((filters or {}).get("source") or "Purchase Invoice").strip()
 	item_filter = (filters or {}).get("item")
 	group_filter = (filters or {}).get("item_group")
+	target_uom = (filters or {}).get("weight_uom")
+	filter_note = (
+		("جمع سند کامل است و فیلتر کالا/گروه را شامل نمی‌شود.",)
+		if item_filter or group_filter
+		else ()
+	)
 	_require_read(ITEM_READ, "برای اجرای این گزارش، دسترسی خواندن کالا لازم است.")
 
 	if source == "Warehouse Inventory":
 		warehouses = _warehouses(company, filters)
 		bins, _rows, _stock = _warehouse_stock(company, warehouses)
 		items = _item_details({row.get("item_code") for row in bins if row.get("item_code")})
-		result = []
+		details = []
+		lines_by_document = {}
+		metadata = {}
 		for row in bins:
 			item = items.get(row.get("item_code")) or {}
-			if item_filter and row.get("item_code") != item_filter:
-				continue
-			if group_filter and item.get("item_group") != group_filter:
-				continue
 			measurement = _measurement(item, source=measurements.CURRENT)
 			presence = measurements.snapshot_presence(item)
 			gross_available = "sp_gross_weight" in presence
 			volume_available = all(
 				field in presence for field in ("sp_length_cm", "sp_width_cm", "sp_height_cm")
 			)
-			result.append(
+			document = row.get("warehouse")
+			line = measurement_totals.MeasurementLine(
+				document=document,
+				item_code=row.get("item_code") or "",
+				stock_qty=row.get("actual_qty"),
+				measurement=measurement,
+				net_present=measurement_totals.weight_is_present(measurement),
+				gross_present=gross_available,
+				volume_present=volume_available,
+			)
+			lines_by_document.setdefault(document, []).append(line)
+			metadata[document] = {
+				"document_type": "Warehouse Inventory",
+				"posting_date": None,
+				"party": "",
+				"cargo_ref": "",
+				"item_label": "جمع انبار",
+			}
+			if item_filter and row.get("item_code") != item_filter:
+				continue
+			if group_filter and item.get("item_group") != group_filter:
+				continue
+			details.append(
 				{
+					"row_type": "ردیف کالا",
 					"document_type": "Warehouse Inventory",
-					"document": row.get("warehouse"),
+					"document": document,
 					"posting_date": None,
 					"party": "",
 					"cargo_ref": "",
 					"item_code": row.get("item_code"),
 					"item_name": item.get("item_name") or "",
+					"rejected_qty": None,
+					"rejected_net_weight": None,
+					"rejected_gross_weight": None,
+					"rejected_volume_cm3": None,
+					"rejected_volume_m3": None,
+					"rows_count": None,
+					"coverage": "",
+					"warning": "",
+					"_idx": 0,
 					**reporting.weight_volume_row(
 						row.get("actual_qty"),
 						measurement=measurement,
+						net_available=line.net_present,
 						gross_available=gross_available,
 						volume_available=volume_available,
 						measurement_source="current_item",
 					),
 				}
 			)
-		return result
+		return _with_document_summaries(
+			details,
+			lines_by_document,
+			metadata,
+			target_uom=target_uom,
+			extra_warnings=filter_note,
+		)
 
 	document = _purchase_document(source)
 	if not document:
@@ -561,6 +848,7 @@ def weight_volume_rows(company, filters):
 	custom_fields = _measurement_fields(child_meta)
 	fields = [
 		"parent",
+		"idx",
 		"item_code",
 		"item_name",
 		"qty",
@@ -569,6 +857,8 @@ def weight_volume_rows(company, filters):
 		"weight_per_unit",
 		"weight_uom",
 	]
+	if child_meta.get_field("rejected_qty"):
+		fields.append("rejected_qty")
 	fields.extend(custom_fields)
 	if child_meta.get_field("sp_measurement_snapshot"):
 		fields.append("sp_measurement_snapshot")
@@ -584,51 +874,106 @@ def weight_volume_rows(company, filters):
 		"ردیف سند خرید",
 	)
 	items = _item_details({row.get("item_code") for row in rows if row.get("item_code")})
-	result = []
+	details = []
+	lines_by_document = {}
+	metadata = {}
 	for row in rows:
 		item = items.get(row.get("item_code")) or {}
-		if item_filter and row.get("item_code") != item_filter:
-			continue
-		if group_filter and item.get("item_group") != group_filter:
-			continue
-		factor = row.get("conversion_factor") or 1
-		stock_qty = row.get("qty") or 0
-		stock_qty = inventory.as_decimal(stock_qty) * inventory.positive_factor(factor)
+		factor = inventory.positive_factor(row.get("conversion_factor") or 1)
+		stock_qty = inventory.as_decimal(row.get("qty") or 0) * factor
+		has_rejected = source == "Purchase Receipt" and bool(child_meta.get_field("rejected_qty"))
+		rejected_qty = (
+			inventory.as_decimal(row.get("rejected_qty") or 0) * factor if has_rejected else inventory.ZERO
+		)
 		snapshotted = bool(row.get("sp_measurement_snapshot")) and bool(custom_fields)
-		measurement = _measurement(row) if snapshotted else None
+		measurement = _measurement(row)
 		presence = (
 			measurements.parse_presence(row.get(measurements.PRESENCE_FIELD))
 			if snapshotted and child_meta.get_field(measurements.PRESENCE_FIELD)
 			else ()
 		)
+		net_present = measurement_totals.weight_is_present(measurement)
 		gross_available = "sp_gross_weight" in presence
 		volume_available = all(
 			field in presence for field in ("sp_length_cm", "sp_width_cm", "sp_height_cm")
 		)
-		result.append(
+		parent = row.get("parent")
+		lines_by_document.setdefault(parent, []).append(
+			measurement_totals.MeasurementLine(
+				document=parent,
+				item_code=row.get("item_code") or "",
+				stock_qty=stock_qty,
+				rejected_stock_qty=rejected_qty,
+				measurement=measurement,
+				net_present=net_present,
+				gross_present=gross_available,
+				volume_present=volume_available,
+				idx=row.get("idx") or 0,
+			)
+		)
+		metadata[parent] = {
+			"document_type": source,
+			"posting_date": parent_map[parent].get(date_field),
+			"party": parent_map[parent].get("supplier") or "",
+			"cargo_ref": parent_map[parent].get("sp_cargo_ref") or "",
+			"item_label": "جمع سند",
+		}
+		if item_filter and row.get("item_code") != item_filter:
+			continue
+		if group_filter and item.get("item_group") != group_filter:
+			continue
+		rejected_values = (
+			reporting.weight_volume_row(
+				rejected_qty,
+				measurement=measurement,
+				net_available=net_present,
+				gross_available=gross_available,
+				volume_available=volume_available,
+			)
+			if has_rejected
+			else None
+		)
+		details.append(
 			{
+				"row_type": "ردیف کالا",
 				"document_type": source,
-				"document": row.get("parent"),
-				"posting_date": parent_map[row.get("parent")].get(date_field),
-				"party": parent_map[row.get("parent")].get("supplier") or "",
-				"cargo_ref": parent_map[row.get("parent")].get("sp_cargo_ref") or "",
+				"document": parent,
+				"posting_date": parent_map[parent].get(date_field),
+				"party": parent_map[parent].get("supplier") or "",
+				"cargo_ref": parent_map[parent].get("sp_cargo_ref") or "",
 				"item_code": row.get("item_code"),
 				"item_name": row.get("item_name") or item.get("item_name") or "",
+				"rejected_qty": rejected_qty if has_rejected else None,
+				"rejected_net_weight": rejected_values["net_weight"] if rejected_values else None,
+				"rejected_gross_weight": rejected_values["gross_weight"] if rejected_values else None,
+				"rejected_volume_cm3": rejected_values["volume_cm3"] if rejected_values else None,
+				"rejected_volume_m3": rejected_values["volume_m3"] if rejected_values else None,
+				"rows_count": None,
+				"coverage": "",
+				"warning": "",
+				"_idx": row.get("idx") or 0,
 				**reporting.weight_volume_row(
 					stock_qty,
 					measurement=measurement,
-					native_net_weight=row.get("total_weight")
-					if row.get("total_weight") is not None
-					else (stock_qty * inventory.as_decimal(row.get("weight_per_unit") or 0)),
+					native_net_weight=stock_qty * inventory.as_decimal(row.get("weight_per_unit") or 0)
+					if net_present
+					else None,
 					native_weight_uom=row.get("weight_uom"),
+					net_available=net_present,
 					gross_available=gross_available,
 					volume_available=volume_available,
 					measurement_source="historical_snapshot"
 					if snapshotted
 					else (
-						"native_net_snapshot" if row.get("total_weight") is not None else "native_item_weight"
+						"native_net_snapshot" if net_present else "unavailable"
 					),
 				),
 			}
 		)
-	return result
+	return _with_document_summaries(
+		details,
+		lines_by_document,
+		metadata,
+		target_uom=target_uom,
+		extra_warnings=filter_note,
+	)

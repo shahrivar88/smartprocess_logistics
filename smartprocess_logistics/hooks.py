@@ -1,11 +1,12 @@
 """Hook configuration for smartprocess_logistics.
 
 Everything this app registers is here: two lifecycle hooks (`after_install`, `after_migrate`),
-the cleanup that runs after a removal, one scheduled job, the Desk assets, the approved form
-scripts, the two company conditions the framework's own list queries use, and the document
-events of the managed workflow. Each is idempotent and none calls `ignore_permissions`. What
-is deliberately **absent** — `override_doctype_class`, `override_whitelisted_methods`, monkey
-patching — is listed at the bottom of this file with the reason.
+the cleanup that runs after a removal, one scheduled job, the Desk assets, the two standard
+records it ships as fixtures, the approved form scripts, the two company conditions the
+framework's own list queries use, and the document events of the managed workflow. Each is
+idempotent and none calls `ignore_permissions`. What is deliberately **absent** —
+`override_doctype_class`, `override_whitelisted_methods`, monkey patching — is listed at the
+bottom of this file with the reason.
 
 The approved composition lives in `hooks_composition.py`. The development tree additionally
 loads `hooks_commitment.py`, which appends the paused committed-stock panel and registers its
@@ -24,6 +25,19 @@ app_description = "شماره سریال گارانتی اختیاری برای 
 app_email = "info@smartprocess.local"
 app_license = "mit"
 
+# Frappe v16's apps screen and dock. The custom homepage app on this site still renders the
+# legacy icon grid, so `desktop_icon/لجستیک.json` remains as the compatibility entry; this hook
+# and `dock/smartprocess_logistics/` are the supported v16 entry and must not be removed.
+app_home = "/app/warehouse-and-purchasing"
+add_to_apps_screen = [
+	{
+		"name": app_name,
+		"title": app_title,
+		"route": app_home,
+		"sequence_id": 40,
+	}
+]
+
 # Installation is valid only on a site that already runs Frappe and ERPNext.
 required_apps = ["frappe", "erpnext"]
 
@@ -36,15 +50,34 @@ required_apps = ["frappe", "erpnext"]
 # The report's own `.js` is loaded by Frappe from its folder and needs no hook.
 app_include_css = ["/assets/smartprocess_logistics/css/logistics.css"]
 
-# The Desk's only shared script: the display switches, read once per session from boot. Every
-# form script that decides whether to override a Link query asks it instead of asking the
-# server, so opening a form costs no request and a switched-off feature leaves the native
-# selector untouched.
-app_include_js = ["/assets/smartprocess_logistics/js/visibility.js"]
-
 # The approved scripts. The development composition appends the committed-stock panel file from
 # `hooks_commitment.py`; the release subset leaves it out.
 doctype_js = hooks_composition.approved_doctype_js()
+
+# --- The records this app ships ------------------------------------------------------------
+#
+# Three standard records, and nothing else: the explicit `Physical` Warehouse Type this app
+# classifies by, the Property Setter that makes it the default for a **new** Warehouse, and the
+# one that lets `translated_doctype` render its Persian label. `frappe.utils.fixtures.sync_fixtures`
+# imports `fixtures/*.json` on every install (`installer.py`) and every migrate (`migrate.py`);
+# each record carries a fixed name, so a repeat replaces it instead of adding a second one. No
+# existing warehouse or warehouse type is touched: a default is read only when a new document is
+# created, and `translated_doctype` changes only how a label is looked up.
+fixtures = [
+	{"dt": "Warehouse Type", "filters": [["name", "=", "Physical"]]},
+	{
+		"dt": "Property Setter",
+		"filters": [
+			["doc_type", "=", "Warehouse"],
+			["field_name", "=", "warehouse_type"],
+			["property", "=", "default"],
+		],
+	},
+	{
+		"dt": "Property Setter",
+		"filters": [["doc_type", "=", "Warehouse Type"], ["property", "=", "translated_doctype"]],
+	},
+]
 
 
 # --- The framework's own queries ---------------------------------------------------------
@@ -90,11 +123,6 @@ if importlib.util.find_spec("smartprocess_logistics.hooks_commitment"):
 # reporting the app as installed with the work half done. `after_migrate` is what repairs that.
 after_install = "smartprocess_logistics.install.after_install"
 after_migrate = "smartprocess_logistics.install.after_migrate"
-
-# The seven display switches, handed to the Desk with the rest of the boot payload. Frappe calls
-# every `boot_session` hook with `bootinfo` (`frappe/boot.py::get_bootinfo`); this one adds a
-# namespace and changes nothing else.
-boot_session = "smartprocess_logistics.boot.boot_session"
 
 # The app's only scheduled job, and the reason it has one: `Logistics Import Session` is
 # transient by design, so rows that were never confirmed, and rows whose import was applied

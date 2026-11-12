@@ -5,6 +5,89 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased — 2026-10-30
+
+**Report consolidation, weight/volume completion and purchase-to-stock fixes verified on
+`SmartProcessERP` (port 8080). Not tagged and not released.** The version in
+`smartprocess_logistics/__init__.py` remains `0.5.1`.
+
+### Added
+
+- **«تراز موجودی»** as the primary operational report. It shows physical, Transit and Virtual
+  stock as separate columns, and only physical plus Transit count toward operational shortage.
+- **Purchase Receipt weight/volume completion**: document-level accepted/rejected totals,
+  UOM-normalized net/gross/volume, missing-vs-zero coverage warnings, and a read-only Desk panel
+  backed by a GET endpoint.
+- **v16 app entry**: `add_to_apps_screen`, a standard `Dock` record, and the compatibility
+  `desktop_icon/لجستیک.json` that links the «انبار و خرید» Workspace Sidebar.
+- **Warehouse Type fixtures**: the explicit `Physical` type, its default for new Warehouses, and
+  the translated-doctype property.
+
+### Changed
+
+- Quotation and Sales Order selectors show physical and Transit stock separately and exclude
+  Virtual warehouses from both Item availability and warehouse choices.
+- Sales Invoice selectors remain physical-only.
+- Procurement Shortage and the operational dashboard share the same physical/Transit/Virtual
+  calculation; a rejected Purchase Receipt quantity must name a Virtual warehouse, on draft,
+  submit and return.
+- The README documents the required invoice-first order: submitted Purchase Order → submitted
+  Purchase Invoice with `update_stock = 0` → Purchase Receipt linked to the invoice row →
+  Material Transfer from Transit to a physical warehouse before sale or delivery.
+
+### Fixed
+
+- Legacy procurement shortage no longer counts Virtual stock as coverage; `virtual_stock` is
+  Virtual-only and `transit_stock` is separate.
+- Shared shortage/report calculations no longer drift between «تراز موجودی» and
+  `Procurement Shortage`.
+- Rejected quantities in a non-Virtual warehouse are refused instead of silently becoming
+  sellable stock.
+- The rejected-warehouse type lookup on `Purchase Receipt` is scoped to the document's company,
+  so a row cannot probe another company's warehouse classification.
+- A site's `sp_virtual_warehouse_types` override now decides membership for `policy.kind` exactly
+  as it already did for `policy.is_virtual_type`. One list, one answer: an override that leaves
+  `Transit` out makes that stock physical in every report instead of physical in one and transit
+  in another.
+- «تراز موجودی» reads `sp_recommended_purchase_net_of_open_po` like the other two reports, so an
+  open Purchase Order nets the purchase suggestion there too when the site says it should.
+- A missing `sp_serial_required` custom field no longer switches off the whole Purchase Receipt
+  handler. The standard `is_stock_item` flag is read unconditionally, so the invoice-first and
+  rejected-warehouse rules still run on a site whose fixtures have not been synced yet.
+
+### Verified
+
+- Full database-free suite: **1508 tests OK** — 12 skipped with the system interpreter and 2 with
+  the isolated `openpyxl` environment.
+- On `SmartProcessERP`: all six Logistics reports execute; physical/Transit/Virtual separation,
+  selector filtering, Virtual-only rejected warehouse, invoice-first refusal, Sidebar, Workspace,
+  Dock, Desktop Icon and the Administrator homepage entry were checked. Administrator `get_bootinfo`
+  includes «لجستیک»; the non-Administrator failure belongs to the separate homepage app.
+- Every deployed runtime file matched this branch byte-for-byte except the header comments of
+  `quotation_stock_visibility.js` and `sales_order_stock_visibility.js`; their executable code is
+  identical after comments are stripped. The review fixes that landed after that comparison —
+  the company-scoped rejected-warehouse lookup and the optional managed field in
+  `purchase/receipt.py`, the `policy.kind` membership rule, and the open-supply policy in
+  «تراز موجودی» — are branch-only and not on `SmartProcessERP`. No further deployment was
+  performed in this phase.
+- Backup and pre-deployment file snapshot are retained outside the repository for rollback.
+
+### Known limitations
+
+- `smartprocee_erpnext_homepage` is not Frappe 16.53 compatible: it imports the removed
+  `frappe.boot.get_sidebar_items`, so `get_bootinfo` fails for non-Administrator users. It is a
+  separate app and was not modified.
+- Purchase serial tracking through Purchase Receipt, warehouse transfer, sales and warranty is
+  designed but not implemented; serial work remains Sales-Invoice-side.
+- A submitted Purchase Invoice can still be cancelled while a submitted Purchase Receipt points
+  at it. ERPNext's `Purchase Invoice.on_cancel` has no check for that link, and this app does not
+  add one: a cancel guard is new enforcement and needs its own approved step. The invoice-first
+  rule is enforced when the receipt is submitted, not kept true by the invoice afterwards.
+- The Purchase Receipt weight/volume panel has not been accepted visually in a real browser.
+- `sp_virtual_stock_covers_procurement` is retained as a legacy, non-operational setting.
+- Purchase Invoice GL errors remain in the Accounting project; this app does not change ledger
+  behaviour.
+
 ## 0.5.1 — 2026-10-24
 
 **GitHub publication of the production-approved 0.5.0 functionality.** The application source in

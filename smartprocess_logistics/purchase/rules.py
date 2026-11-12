@@ -10,7 +10,7 @@ class Problem:
 	row: int | None = None
 
 
-def stock_receipt_problems(rows):
+def stock_receipt_problems(rows, *, invoice_first=True):
 	"""Every stock receipt row must name its submitted Purchase Invoice.
 
 	`rows` snapshots: idx, item_code, is_stock_item, is_managed, has_serial_no, qty,
@@ -24,10 +24,35 @@ def stock_receipt_problems(rows):
 	problems = []
 
 	for row in rows:
-		if not row.get("is_stock_item") or abs(float(row.get("qty") or 0)) <= 0:
+		if not row.get("is_stock_item"):
 			continue
 
 		idx = row.get("idx")
+		rejected_qty = abs(float(row.get("rejected_qty") or 0))
+
+		if rejected_qty > 0:
+			if not row.get("rejected_warehouse"):
+				problems.append(
+					Problem(
+						"PR_REJECTED_WAREHOUSE_REQUIRED",
+						f"ردیف {idx}: برای مقدار ردشده باید انبار ردشده انتخاب شود.",
+						idx,
+					)
+				)
+			elif row.get("rejected_warehouse_kind") != "virtual":
+				problems.append(
+					Problem(
+						"PR_REJECTED_WAREHOUSE_NOT_VIRTUAL",
+						f"ردیف {idx}: مقدار ردشده فقط به انبار با نوع Virtual مجاز است.",
+						idx,
+					)
+				)
+
+		if not invoice_first:
+			continue
+
+		if abs(float(row.get("qty") or 0)) <= 0:
+			continue
 
 		if not row.get("purchase_invoice"):
 			problems.append(

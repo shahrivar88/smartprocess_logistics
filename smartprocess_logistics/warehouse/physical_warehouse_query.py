@@ -7,14 +7,17 @@ would have excluded.
 
 One read serves all three selectors. The Sales Invoice one offers physical warehouses and is
 the only one that can be restricted to them; Quotation and Sales Order only plan, so their
-selectors offer both kinds. Whether a selector carries the item's stock per warehouse is each
-document's own switch.
+selectors offer physical and Transit warehouses. Virtual stock is never an operational source,
+so a Virtual warehouse is not offered there. Whether a selector carries the item's stock per
+warehouse is each document's own switch.
 
-A virtual warehouse that a selector offers is labelled as one. It is a real warehouse with real
-stock, but this application refuses it as a sales source when the Sales Invoice or Delivery Note
-built from the row is saved, and a Stock Reservation Entry for it is refused at submit. The
-label is the only place an operator is told that before they choose it; the refusal itself
-stays in `warehouse/sales.py`.
+A row is the warehouse's name and, when its switch is on, one description line: the item's own
+stock there. The Frappe Link already draws the name as the value, so nothing repeats it on the
+description line.
+
+`hide_empty=1` in the Link filters drops the warehouses where the chosen item holds no stock.
+It is a per-request filter, not a setting: the Sales Invoice form offers it as a per-user view
+switch, and the flag only ever narrows the list.
 """
 
 import json
@@ -22,7 +25,7 @@ import json
 import frappe
 from frappe.utils import cint
 
-from smartprocess_logistics.core import sales_visibility
+from smartprocess_logistics.core import sales_visibility, selection_filters
 from smartprocess_logistics.warehouse import (
 	classification,
 	company_scope,
@@ -38,7 +41,6 @@ SALES_ORDER_QUERY_METHOD = (
 	"smartprocess_logistics.warehouse.physical_warehouse_query.sales_order_warehouses"
 )
 MAX_WAREHOUSE_ROWS = 2000
-VIRTUAL_ROW_LABEL = "انبار مجازی"
 
 
 def _filters_dict(filters):
@@ -76,15 +78,7 @@ def _stock_by_warehouse(company, warehouses, item_code):
 	return {row.get("warehouse"): row.get("actual_qty") for row in rows}
 
 
-def _warehouse_label(row, virtual_types):
-	"""The name line; a virtual warehouse says so, because it cannot supply a sale."""
-	label = row.get("warehouse_name") or ""
-	if not policy.is_virtual_type(row.get("warehouse_type"), virtual_types):
-		return label
-	return f"{label} — {VIRTUAL_ROW_LABEL}" if label else VIRTUAL_ROW_LABEL
-
-
-def _page(doctype, txt, start, page_len, filters, *, physical_only, show_stock):
+def _page(doctype, txt, start, page_len, filters, *, physical_only, exclude_virtual, show_stock):
 	"""One page of leaf, enabled warehouses of the company, with an optional stock line."""
 	if doctype != "Warehouse":
 		return []
@@ -110,7 +104,7 @@ def _page(doctype, txt, start, page_len, filters, *, physical_only, show_stock):
 		"Warehouse",
 		filters={"company": company, "is_group": 0, "disabled": 0},
 		or_filters=or_filters,
-		fields=["name", "warehouse_name", "warehouse_type"],
+		fields=["name", "warehouse_type"],
 		limit_page_length=MAX_WAREHOUSE_ROWS + 1,
 	)
 	if len(rows) > MAX_WAREHOUSE_ROWS:
@@ -119,26 +113,46 @@ def _page(doctype, txt, start, page_len, filters, *, physical_only, show_stock):
 			frappe.ValidationError,
 		)
 	virtual_types = classification.virtual_types()
+	kinds = {
+		row.get("name"): policy.kind(row.get("warehouse_type"), virtual_types) for row in rows
+	}
 	if physical_only:
-		rows = [row for row in rows if not policy.is_virtual_type(row.get("warehouse_type"), virtual_types)]
-
-	page = rows[start : start + page_len]
-	if physical_only:
-		base = [(row.get("name"), row.get("warehouse_name") or "") for row in page]
-	else:
-		base = [(row.get("name"), _warehouse_label(row, virtual_types)) for row in page]
+		rows = [row for row in rows if kinds.get(row.get("name")) == policy.PHYSICAL]
+	elif exclude_virtual:
+		rows = [row for row in rows if kinds.get(row.get("name")) != policy.VIRTUAL]
 
 	item_code = _item_code(values)
-	if not show_stock or not item_code or not page:
-		return base
+	hide_empty = selection_filters.wants(values.get("hide_empty"))
+	stock = None
 
-	stock = _stock_by_warehouse(company, [row.get("name") for row in page], item_code)
+	if hide_empty and item_code and rows:
+		# Filter before paging, so the page is filled with rows that match. A caller who cannot
+		# read `Bin` gets the unfiltered list: `None` is "not answered", not "empty".
+		stock = _stock_by_warehouse(company, [row.get("name") for row in rows], item_code)
+		if stock is not None:
+			rows = [
+				row
+				for row in rows
+				if selection_filters.keep_warehouse(stock.get(row.get("name"), 0), True)
+			]
+
+	page = rows[start : start + page_len]
+	names = [row.get("name") for row in page]
+
+	if not show_stock or not item_code or not page:
+		return [(name,) for name in names]
+
 	if stock is None:
-		return base
+		stock = _stock_by_warehouse(company, names, item_code)
+	if stock is None:
+		return [(name,) for name in names]
 
 	return [
-		(name, warehouse_name, sales_visibility.warehouse_stock_text(stock.get(name, 0)))
-		for name, warehouse_name in base
+		(
+			name,
+			sales_visibility.warehouse_stock_text(stock.get(name, 0), kinds.get(name)),
+		)
+		for name in names
 	]
 
 
@@ -155,6 +169,7 @@ def physical_warehouses(doctype, txt, searchfield, start, page_len, filters):
 		page_len,
 		filters,
 		physical_only=flags[visibility_settings.SI_PHYSICAL_WAREHOUSES_ONLY],
+		exclude_virtual=False,
 		show_stock=flags[visibility_settings.SHOW_SI_WAREHOUSE_STOCK],
 	)
 
@@ -162,7 +177,7 @@ def physical_warehouses(doctype, txt, searchfield, start, page_len, filters):
 @frappe.whitelist(methods=["GET"])
 @frappe.validate_and_sanitize_search_inputs
 def quotation_warehouses(doctype, txt, searchfield, start, page_len, filters):
-	"""Quotation: every warehouse of the company, because the document only plans."""
+	"""Quotation: physical and transit warehouses; virtual warehouses are excluded."""
 	flags = visibility_settings.load()
 
 	return _page(
@@ -172,6 +187,7 @@ def quotation_warehouses(doctype, txt, searchfield, start, page_len, filters):
 		page_len,
 		filters,
 		physical_only=False,
+		exclude_virtual=True,
 		show_stock=flags[visibility_settings.SHOW_QUOTATION_WAREHOUSE_STOCK],
 	)
 
@@ -179,7 +195,7 @@ def quotation_warehouses(doctype, txt, searchfield, start, page_len, filters):
 @frappe.whitelist(methods=["GET"])
 @frappe.validate_and_sanitize_search_inputs
 def sales_order_warehouses(doctype, txt, searchfield, start, page_len, filters):
-	"""Sales Order: every warehouse of the company, because the document only plans."""
+	"""Sales Order: physical and transit warehouses; virtual warehouses are excluded."""
 	flags = visibility_settings.load()
 
 	return _page(
@@ -189,5 +205,6 @@ def sales_order_warehouses(doctype, txt, searchfield, start, page_len, filters):
 		page_len,
 		filters,
 		physical_only=False,
+		exclude_virtual=True,
 		show_stock=flags[visibility_settings.SHOW_SO_WAREHOUSE_STOCK],
 	)

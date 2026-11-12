@@ -9,14 +9,20 @@ from smartprocess_logistics.core.inventory import quantity
 from smartprocess_logistics.core.stock_search import format_quantity
 
 PHYSICAL_LABEL = "موجودی فیزیکی"
+TRANSIT_LABEL = "موجودی ترانزیت"
 VIRTUAL_LABEL = "موجودی مجازی"
 WAREHOUSE_STOCK_LABEL = "موجودی"
 STOCK_SEPARATOR = " | "
 
 
-def warehouse_stock_text(actual_qty):
+def warehouse_stock_text(actual_qty, kind=None):
 	"""The secondary line under a warehouse in a sales selector."""
-	return f"{WAREHOUSE_STOCK_LABEL}: {format_quantity(quantity(actual_qty))}"
+	label = WAREHOUSE_STOCK_LABEL
+	if kind == "transit":
+		label = TRANSIT_LABEL
+	elif kind == "virtual":
+		label = VIRTUAL_LABEL
+	return f"{label}: {format_quantity(quantity(actual_qty))}"
 
 
 def stock_text(physical, uom=""):
@@ -24,19 +30,19 @@ def stock_text(physical, uom=""):
 	return f"{PHYSICAL_LABEL}: {format_quantity(quantity(physical))} {(uom or '').strip()}".strip()
 
 
-def combined_stock_text(physical, virtual=None):
-	"""`موجودی فیزیکی: 24 | موجودی مجازی: 15` — the one line Quotation and Sales Order show."""
+def combined_stock_text(physical, transit=None):
+	"""`موجودی فیزیکی: 24 | موجودی ترانزیت: 15` — the Quotation and Sales Order line."""
 	physical = format_quantity(quantity(physical))
-	virtual = format_quantity(quantity(virtual or 0))
+	transit = format_quantity(quantity(transit or 0))
 
-	return STOCK_SEPARATOR.join([f"{PHYSICAL_LABEL}: {physical}", f"{VIRTUAL_LABEL}: {virtual}"])
+	return STOCK_SEPARATOR.join([f"{PHYSICAL_LABEL}: {physical}", f"{TRANSIT_LABEL}: {transit}"])
 
 
-def item_suggestion(item_code, item_name, physical, virtual=None, uom="", include_virtual=False):
+def item_suggestion(item_code, item_name, physical, transit=None, uom="", include_transit=False):
 	"""A Link row: Item Code as the value, Item Name and stock as the description."""
 	parts = [item_name or ""]
-	if include_virtual:
-		parts.append(combined_stock_text(physical, virtual))
+	if include_transit:
+		parts.append(combined_stock_text(physical, transit))
 	else:
 		parts.append(stock_text(physical, uom))
 

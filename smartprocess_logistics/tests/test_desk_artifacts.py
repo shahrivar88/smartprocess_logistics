@@ -89,9 +89,21 @@ class TestWorkspaceSidebar(UnitTestCase):
 
 		self.assertEqual(len(carrying), 2, f"expected the two workspace sidebars, found {carrying}")
 		self.assertEqual(carrying[0][0], "انبار و خرید")
-		self.assertEqual(len(carrying[0][1]), 14)
+		self.assertEqual(len(carrying[0][1]), 13)
 		self.assertEqual(carrying[1][0], "سریال لجستیک")
 		self.assertEqual(len(carrying[1][1]), 6)
+
+	def test_the_operational_report_leads_the_reports_section(self):
+		_path, doc = next(
+			(path, doc) for path, doc in sidebars() if doc["name"] == "انبار و خرید"
+		)
+		reports = [
+			item["link_to"]
+			for item in doc["items"]
+			if item.get("link_type") == "Report"
+		]
+
+		self.assertEqual(reports[0], "تراز موجودی")
 
 	def test_the_sidebar_that_carries_them_is_named_in_persian(self):
 		for _path, doc in sidebars():
@@ -126,10 +138,9 @@ class TestWorkspaceSidebar(UnitTestCase):
 			"Logistics",
 			"Warehouse and Purchasing",
 			"Warehouse Inventory",
-			"Inventory and Procurement Dashboard",
 			"Sales Orders Ready for Invoicing",
-			"Procurement Shortage",
 			"Item Weight and Volume",
+			"تراز موجودی",
 			"Purchase Order",
 			"Purchase Receipt",
 			"Purchase Invoice",
@@ -159,9 +170,11 @@ class TestDesktopIcon(UnitTestCase):
 		]
 		icons = [read_json(path) for path in sorted(ICON_DIR.glob("*.json"))]
 
-		self.assertEqual(len(icons), 1)
-		self.assertEqual(icons[0]["link_type"], "Workspace Sidebar")
-		self.assertIn(icons[0]["link_to"], carrying)
+		self.assertEqual(len(icons), 2)
+		for icon in icons:
+			with self.subTest(icon=icon["name"]):
+				self.assertEqual(icon["link_type"], "Workspace Sidebar")
+				self.assertIn(icon["link_to"], carrying)
 
 	def test_the_label_and_the_name_are_the_same_string(self):
 		# `Desktop Icon` names itself from `label` (`_sync_autoname_field` keeps the two equal),
@@ -172,12 +185,39 @@ class TestDesktopIcon(UnitTestCase):
 			with self.subTest(path=path.name):
 				self.assertEqual(doc["name"], doc["label"])
 
-	def test_the_icon_is_shown_to_the_apps_own_roles(self):
-		doc = read_json(sorted(ICON_DIR.glob("*.json"))[0])
-		roles = {row["role"] for row in doc.get("roles") or []}
+	def test_the_icons_are_shown_to_the_apps_own_roles(self):
+		docs = {doc["name"]: doc for doc in (read_json(path) for path in sorted(ICON_DIR.glob("*.json")))}
+
+		serial_roles = {row["role"] for row in docs["سریال لجستیک"].get("roles") or []}
+		logistics_roles = {row["role"] for row in docs["لجستیک"].get("roles") or []}
 
 		self.assertTrue(
-			{"Logistics Serial Viewer", "Logistics Serial Editor", "Logistics Serial Manager"} <= roles
+			{"Logistics Serial Viewer", "Logistics Serial Editor", "Logistics Serial Manager"}
+			<= serial_roles
+		)
+		self.assertTrue({"Stock User", "Purchase User", "Sales User", "System Manager"} <= logistics_roles)
+
+
+class TestAppsScreenEntry(UnitTestCase):
+	"""v16 opens apps through add_to_apps_screen and the app's Dock, not a second sidebar."""
+
+	def test_the_app_declares_its_apps_screen_entry(self):
+		source = (APP / "hooks.py").read_text(encoding="utf-8")
+
+		self.assertIn("add_to_apps_screen", source)
+		self.assertIn('"name": app_name', source)
+		self.assertIn('"route": app_home', source)
+
+	def test_the_dock_opens_the_app_sidebar(self):
+		path = APP / "dock" / "smartprocess_logistics" / "smartprocess_logistics.json"
+		doc = read_json(path)
+
+		self.assertEqual(doc["app"], "smartprocess_logistics")
+		self.assertEqual(doc["name"], "smartprocess_logistics")
+		self.assertEqual(doc["standard"], 1)
+		self.assertEqual(
+			(doc["items"][0]["link_type"], doc["items"][0]["link_to"]),
+			("Sidebar", "SmartProcess Logistics"),
 		)
 
 
@@ -212,7 +252,7 @@ class TestTheAppLevelFilesAreNamedAfterTheirDocuments(UnitTestCase):
 					self.assertEqual(path.stem, self.scrub(name), f"migrate would delete {name!r}")
 					seen += 1
 
-		self.assertEqual(seen, 4, "the four files this app ships: three sidebars and one icon")
+		self.assertEqual(seen, 5, "the five files this app ships: three sidebars and two icons")
 
 
 class TestWorkspace(UnitTestCase):
@@ -262,7 +302,7 @@ class TestWarehouseWorkspace(TestWorkspace):
 	def workspace(self, name="Warehouse and Purchasing"):
 		return super().workspace(name)
 
-	def test_it_links_the_five_approved_reports(self):
+	def test_it_links_the_approved_reports(self):
 		_path, doc = self.workspace()
 
 		reports = {link["link_to"] for link in doc["links"] if link.get("link_type") == "Report"}
@@ -271,12 +311,19 @@ class TestWarehouseWorkspace(TestWorkspace):
 			reports,
 			{
 				"Warehouse Inventory",
-				"Inventory and Procurement Dashboard",
 				"Sales Orders Ready for Invoicing",
-				"Procurement Shortage",
 				"Item Weight and Volume",
+				"تراز موجودی",
 			},
 		)
+
+	def test_the_operational_report_is_the_first_report_link(self):
+		_path, doc = self.workspace()
+
+		reports = [link["link_to"] for link in doc["links"] if link.get("link_type") == "Report"]
+
+		self.assertEqual(reports[0], "تراز موجودی")
+		self.assertEqual(doc["links"][0]["link_count"], len(reports))
 
 
 class TestReport(UnitTestCase):

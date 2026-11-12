@@ -49,8 +49,10 @@ class TestSettingsFields(UnitTestCase):
 
 		self.assertIn("policies.inventory_policy()", source)
 		self.assertIn("policy.allocation_priority", source)
-		self.assertIn("policy.virtual_stock_covers_procurement", source)
 		self.assertIn("policy.recommended_purchase_net_of_open_po", source)
+		self.assertIn("fulfilment.stock_by_item", source)
+		self.assertIn("transit_by_item", source)
+		self.assertNotIn("policy.virtual_stock_covers_procurement", source)
 
 
 class TestSettingsTranslations(UnitTestCase):

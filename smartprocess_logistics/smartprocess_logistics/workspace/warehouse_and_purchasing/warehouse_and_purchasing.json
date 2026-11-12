@@ -17,10 +17,20 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "گزارش‌ها",
-   "link_count": 5,
+   "link_count": 4,
    "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "تراز موجودی",
+   "link_count": 0,
+   "link_to": "تراز موجودی",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
   },
   {
    "hidden": 0,
@@ -35,29 +45,9 @@
   {
    "hidden": 0,
    "is_query_report": 1,
-   "label": "داشبورد موجودی و خرید",
-   "link_count": 0,
-   "link_to": "Inventory and Procurement Dashboard",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
    "label": "سفارش‌های آمادهٔ فاکتور",
    "link_count": 0,
    "link_to": "Sales Orders Ready for Invoicing",
-   "link_type": "Report",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 1,
-   "label": "کسری خرید",
-   "link_count": 0,
-   "link_to": "Procurement Shortage",
    "link_type": "Report",
    "onboard": 0,
    "type": "Link"
@@ -180,9 +170,9 @@
    "type": "Link"
   }
  ],
- "modified": "2026-10-23 16:05:00.000000",
+ "modified": "2026-10-30 13:00:00.000000",
  "modified_by": "Administrator",
- "module": null,
+ "module": "SmartProcess Logistics",
  "name": "Warehouse and Purchasing",
  "number_cards": [],
  "owner": "Administrator",

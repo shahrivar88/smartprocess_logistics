@@ -17,6 +17,16 @@ class TestClassification(UnitTestCase):
 			with self.subTest(warehouse_type=warehouse_type):
 				self.assertFalse(policy.is_virtual_type(warehouse_type))
 
+	def test_the_explicit_physical_type_is_physical(self):
+		"""The type this app ships alongside the empty one; both keep stock sellable."""
+		for warehouse_type in ("Physical", "فیزیکی"):
+			with self.subTest(warehouse_type=warehouse_type):
+				self.assertFalse(policy.is_virtual_type(warehouse_type))
+
+	def test_the_shipped_physical_type_is_not_in_the_virtual_list(self):
+		self.assertNotIn("Physical", policy.DEFAULT_VIRTUAL_TYPES)
+		self.assertNotIn("فیزیکی", policy.DEFAULT_VIRTUAL_TYPES)
+
 	def test_a_site_override_can_name_its_own_types(self):
 		self.assertTrue(policy.is_virtual_type("SP Virtual", ("SP Virtual",)))
 		self.assertFalse(policy.is_virtual_type("Virtual", ("SP Virtual",)))

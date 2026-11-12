@@ -61,7 +61,12 @@ def _invoice_lines(doc, item_names):
 
 @frappe.whitelist(methods=["GET"])
 def sales_order_progress(sales_order=None):
-	"""Ordered, invoiced, remaining and delivered quantities for one Sales Order."""
+	"""Ordered, invoiced, remaining and delivered quantities for one Sales Order.
+
+	Also returns the derived operational status, the invoice names behind each invoiced
+	quantity (for drill-down) and the totals the panel prints. Read-only: it reads submitted
+	Sales Invoices, and it never writes to the Sales Order or to the invoices.
+	"""
 	name = str(sales_order or "").strip()
 	if not name:
 		frappe.throw("شناسهٔ سفارش فروش مشخص نشده است.")
@@ -75,6 +80,10 @@ def sales_order_progress(sales_order=None):
 	billing_available = invoice_lines is not None
 	invoiced = procurement.invoiced_quantities_by_so_detail(invoice_lines or [])
 	reviews = procurement.credit_note_reviews_by_so_detail(invoice_lines or [])
+
+	invoices_by_so_detail = {}
+	for line in invoice_lines or ():
+		invoices_by_so_detail.setdefault(line.so_detail, set()).add(line.parent)
 
 	rows = []
 	if billing_available:
@@ -100,6 +109,7 @@ def sales_order_progress(sales_order=None):
 			progress = (line.invoiced_qty / billable * 100) if billable else 0
 			rows.append(
 				{
+					"so_detail": item.name,
 					"item_code": item.item_code,
 					"item_name": item.item_name,
 					"ordered_qty": float(quantity(item.qty)),
@@ -108,12 +118,14 @@ def sales_order_progress(sales_order=None):
 					"delivered_qty": float(quantity(item.delivered_qty)),
 					"progress": float(progress),
 					"review": ", ".join(reviews.get(item.name, ())),
+					"invoices": sorted(invoices_by_so_detail.get(item.name, ())),
 				}
 			)
 	else:
 		for item in doc.items:
 			rows.append(
 				{
+					"so_detail": item.name,
 					"item_code": item.item_code,
 					"item_name": item.item_name,
 					"ordered_qty": float(quantity(item.qty)),
@@ -122,6 +134,7 @@ def sales_order_progress(sales_order=None):
 					"delivered_qty": float(quantity(item.delivered_qty)),
 					"progress": None,
 					"review": "",
+					"invoices": [],
 				}
 			)
 
@@ -131,5 +144,26 @@ def sales_order_progress(sales_order=None):
 		"billing_note": ""
 		if billing_available
 		else "مقدار فاکتورشده برای نقش شما در دسترس نیست؛ فقط مقدار سفارش و تحویل نمایش داده می‌شود.",
+		"operational_status": procurement.operational_status(
+			doc.docstatus, doc.status, doc.per_delivered, doc.per_billed
+		),
+		"contributes_to_demand": procurement.contributes_to_demand(
+			doc.docstatus, doc.status, doc.per_delivered
+		),
+		"totals": _totals(rows),
 		"rows": rows,
+	}
+
+
+def _totals(rows):
+	"""Ordered, invoiced, remaining and delivered totals, or `None` where billing is unreadable."""
+	def total(field):
+		values = [row[field] for row in rows if row.get(field) is not None]
+		return float(round(sum(values), 6)) if values else None
+
+	return {
+		"ordered_qty": total("ordered_qty"),
+		"invoiced_qty": total("invoiced_qty"),
+		"remaining_qty": total("remaining_qty"),
+		"delivered_qty": total("delivered_qty"),
 	}

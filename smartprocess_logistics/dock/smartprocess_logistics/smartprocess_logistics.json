@@ -1,0 +1,23 @@
+{
+ "app": "smartprocess_logistics",
+ "creation": "2026-10-30 14:10:00.000000",
+ "docstatus": 0,
+ "doctype": "Dock",
+ "idx": 0,
+ "items": [
+  {
+   "added": 0,
+   "hidden": 0,
+   "icon": "stock",
+   "link_to": "SmartProcess Logistics",
+   "link_type": "Sidebar",
+   "title": "لجستیک"
+  }
+ ],
+ "modified": "2026-10-30 14:10:00.000000",
+ "modified_by": "Administrator",
+ "name": "smartprocess_logistics",
+ "owner": "Administrator",
+ "standard": 1,
+ "user": ""
+}

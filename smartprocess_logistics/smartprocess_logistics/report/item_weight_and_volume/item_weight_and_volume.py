@@ -18,6 +18,8 @@ SOURCE_LABELS = {
 	"historical": "عکس لحظه‌ای تاریخی",
 	"current": "مشخصات فعلی کالا",
 	"current_item": "مشخصات فعلی کالا",
+	"document_total": "جمع سند",
+	"document_partial": "جمع ناقص سند",
 	"unavailable": "ناموجود",
 }
 
@@ -44,6 +46,7 @@ def execute(filters=None):
 
 def columns():
 	return [
+		{"label": _("نوع ردیف"), "fieldname": "row_type", "fieldtype": "Data", "width": 90},
 		{"label": _("نوع سند"), "fieldname": "document_type", "fieldtype": "Data", "width": 110},
 		{"label": _("سند"), "fieldname": "document", "fieldtype": "Data", "width": 150},
 		{"label": _("تاریخ"), "fieldname": "posting_date", "fieldtype": "Date", "width": 100},
@@ -63,6 +66,44 @@ def columns():
 			"options": "UOM",
 			"width": 90,
 		},
+		{
+			"label": _("مقدار ردشده (Stock UOM)"),
+			"fieldname": "rejected_qty",
+			"fieldtype": "Float",
+			"width": 130,
+		},
+		{
+			"label": _("وزن خالص ردشده"),
+			"fieldname": "rejected_net_weight",
+			"fieldtype": "Float",
+			"width": 120,
+		},
+		{
+			"label": _("وزن ناخالص ردشده"),
+			"fieldname": "rejected_gross_weight",
+			"fieldtype": "Float",
+			"width": 120,
+		},
+		{
+			"label": _("حجم ردشده (cm³)"),
+			"fieldname": "rejected_volume_cm3",
+			"fieldtype": "Float",
+			"width": 120,
+		},
+		{
+			"label": _("حجم ردشده (m³)"),
+			"fieldname": "rejected_volume_m3",
+			"fieldtype": "Float",
+			"width": 120,
+		},
+		{"label": _("تعداد ردیف سند"), "fieldname": "rows_count", "fieldtype": "Int", "width": 100},
+		{
+			"label": _("پوشش اندازه‌گیری"),
+			"fieldname": "coverage",
+			"fieldtype": "Data",
+			"width": 220,
+		},
+		{"label": _("هشدار"), "fieldname": "warning", "fieldtype": "Data", "width": 280},
 		{"label": _("منبع وزن خالص"), "fieldname": "net_source", "fieldtype": "Data", "width": 130},
 		{"label": _("منبع وزن ناخالص"), "fieldname": "gross_source", "fieldtype": "Data", "width": 130},
 		{"label": _("منبع حجم"), "fieldname": "volume_source", "fieldtype": "Data", "width": 110},
