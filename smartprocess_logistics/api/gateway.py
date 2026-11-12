@@ -34,6 +34,7 @@ from frappe.utils import now
 
 from smartprocess_logistics.core import (
 	authz,
+	delivery as delivery_rules,
 	export,
 	importer,
 )
@@ -53,6 +54,8 @@ SERIAL_DOCTYPE = "Logistics Serial"
 ASSIGNMENT_DOCTYPE = "Logistics Serial Assignment"
 SETTINGS_DOCTYPE = "Logistics Settings"
 INVOICE_DOCTYPE = "Sales Invoice"
+DELIVERY_DOCTYPE = "Delivery Note"
+DELIVERY_ITEM_DOCTYPE = "Delivery Note Item"
 TRANSFER_DOCTYPE = "Logistics Serial Transfer"
 TRANSFER_ITEM_DOCTYPE = "Logistics Serial Transfer Item"
 
@@ -70,7 +73,15 @@ SESSION_FIELDS = (
 	"result_summary",
 )
 
-ASSIGNMENT_FIELDS = ("name", "sales_invoice_item", "normalized_serial", "logistics_serial", "item_code")
+ASSIGNMENT_FIELDS = (
+	"name",
+	"sales_invoice_item",
+	"normalized_serial",
+	"logistics_serial",
+	"item_code",
+	"delivery_note",
+	"delivery_note_item",
+)
 
 # The format's field list per DocType, for `insert_exported`. A doctype that is not here cannot be
 # placed, and saying so beats the old two-way conditional, which treated anything that was not a
@@ -437,6 +448,104 @@ class FrappeGateway:
 			for row in rows
 		)
 
+	def delivery_candidates(self, invoice_name, row_keys):
+		"""Every Delivery Note row that carries, or reverses, one of this invoice's rows.
+
+		Returns one entry per invoice row, **empty tuple included**, because the validator
+		refuses a mapping that skipped a row: a row nobody looked up must not be read as a row
+		with no delivery. A row with no delivery is written provisionally; a row whose delivery
+		exists and was not read would be written provisionally too, and would then sit outside
+		the confirmed-delivery status for no reason an operator could see.
+
+		Three facts about the documents decide the two queries below:
+
+		- A forward row carries `si_detail`, the invoice row it fulfils.
+		- A **return** row does not. `make_return_doc` sets its `dn_detail` to the forward row it
+		  reverses and copies `against_sales_invoice`, which names the invoice but not the row.
+		  So returns are found by walking `dn_detail` back to the forward rows read above, and a
+		  return whose `dn_detail` is empty — one typed in by hand against an invoice — cannot be
+		  attributed to a row at all. It is deliberately not guessed at: the row's delivered
+		  quantity then stays higher than reality, which overstates a shortage in the report
+		  instead of understating one.
+		- `Delivery Note.per_returned` is maintained by the standard controller and is the
+		  cheapest way to tell a closed delivery from one that can still be returned.
+
+		Cancelled deliveries are read rather than filtered out, so a stored link to one can be
+		reported as cancelled instead of silently disappearing. Drafts are read too: packing
+		happens before submission, and a serial may be attached to a shipment that has not been
+		submitted yet.
+
+		`invoice_name` is not used in the queries — the row names are exact — and is accepted so
+		the call reads as what it is, a question about one invoice.
+		"""
+
+		keys = tuple(dict.fromkeys(key for key in row_keys if key))
+
+		if not keys:
+			return {}
+
+		forward = []
+
+		for chunk in _chunks(keys):
+			forward.extend(
+				frappe.get_all(
+					DELIVERY_ITEM_DOCTYPE,
+					filters={"parenttype": DELIVERY_DOCTYPE, "si_detail": ["in", chunk]},
+					fields=["name", "parent", "si_detail", "qty", "warehouse", "idx"],
+					order_by="parent asc, idx asc, name asc",
+					limit_page_length=0,
+				)
+			)
+
+		forward_names = tuple(sorted({row.get("name") for row in forward if row.get("name")}))
+		returns = []
+
+		for chunk in _chunks(forward_names):
+			returns.extend(
+				frappe.get_all(
+					DELIVERY_ITEM_DOCTYPE,
+					filters={"parenttype": DELIVERY_DOCTYPE, "dn_detail": ["in", chunk]},
+					fields=["name", "parent", "dn_detail", "qty", "warehouse", "idx"],
+					order_by="parent asc, idx asc, name asc",
+					limit_page_length=0,
+				)
+			)
+
+		notes = {
+			note.get("name"): note
+			for note in self._by_names(
+				DELIVERY_DOCTYPE,
+				{row.get("parent") for row in forward + returns if row.get("parent")},
+				["name", "docstatus", "is_return", "per_returned", "posting_date"],
+			)
+		}
+
+		row_of = {row.get("name"): row.get("si_detail") for row in forward}
+		grouped = {key: [] for key in keys}
+
+		for row in forward:
+			_in = row_of.get(row.get("name"))
+			grouped.setdefault(_in, []).append(
+				_candidate(row, notes.get(row.get("parent")), invoice_item=_in)
+			)
+
+		for row in returns:
+			invoice_item = row_of.get(row.get("dn_detail"))
+			grouped.setdefault(invoice_item, []).append(
+				_candidate(row, notes.get(row.get("parent")), invoice_item=invoice_item)
+			)
+
+		return {key: tuple(grouped.get(key, ())) for key in keys}
+
+	def delivery_links(self, identities):
+		"""The delivery links the other registrations of these identities hold.
+
+		See `other_delivery_links`, which is a module-level function because a document event
+		needs the same answer and has no gateway: the event is registered in `hooks_composition`
+		and runs inside the framework, not through this class.
+		"""
+		return other_delivery_links(identities)
+
 	def read_assignment(self, name):
 		"""One assignment's invoice and company, or `None`.
 
@@ -689,7 +798,13 @@ class FrappeGateway:
 		return {"by_normalized": by_normalized, "created": tuple(created), "reused": reused}
 
 	def insert_assignments(self, values):
-		"""Insert the assignments the plan built. The identity comes from the serial, not here."""
+		"""Insert the assignments the plan built. The identity comes from the serial, not here.
+
+		The delivery pair is written when the plan resolved one and left empty when it did not.
+		`delivery_note_item` is passed for symmetry with `delivery_note` and is re-derived from
+		the note by the `Logistics Serial Assignment` document events, which is the only place
+		that value is trusted from.
+		"""
 		names = []
 
 		for value in values:
@@ -703,6 +818,8 @@ class FrappeGateway:
 					"company": value.company,
 					"invoice_item_idx": value.invoice_item_idx,
 					"normalized_serial": value.normalized_serial,
+					"delivery_note": value.delivery_note,
+					"delivery_note_item": value.delivery_note_item,
 				}
 			)
 			document.insert()
@@ -903,13 +1020,20 @@ class FrappeGateway:
 		)
 
 	def transfer_world(
-		self, principal, *, item_codes=(), company_names=(), invoice_names=(), serial_names=()
+		self,
+		principal,
+		*,
+		item_codes=(),
+		company_names=(),
+		invoice_names=(),
+		serial_names=(),
+		delivery_names=(),
 	):
 		"""The site as `core.export.World` sees it — as this caller is allowed to see it.
 
 		The names are the ones **the document mentions**, and they are given rather than derived:
-		the plan asks whether these items, companies and invoices exist here, so a world built
-		only from what is already stored answers about the wrong set. Measured in the lab: a
+		the plan asks whether these items, companies, invoices and delivery notes exist here, so a
+		world built only from what is already stored answers about the wrong set. Measured in the lab: a
 		five-row export imported into a freshly reinstalled site — whose tables are empty by
 		definition — reported every row as `ITEM_MISSING`, with the item sitting on the site the
 		whole time. `core.export.world_names` reads them off the document.
@@ -992,6 +1116,24 @@ class FrappeGateway:
 
 		item_rows = self._invoice_rows(tuple(invoices))
 
+		# The delivery notes the file names, read for the same two facts the invoices above are read
+		# for: is it here, and is it cancelled. Both are questions only the stored document can
+		# answer, and both are refused by `serial_link` on every other write path. Company-scoped
+		# like everything else here, so another company's note is reported as missing rather than
+		# confirming which notes this site has.
+		delivery_headers = [
+			row
+			for row in self._by_names(
+				DELIVERY_DOCTYPE, tuple(delivery_names), ["name", "company", "docstatus"]
+			)
+			if companies is None or row.get("company") in companies
+		]
+
+		deliveries = frozenset(row.get("name") for row in delivery_headers)
+		cancelled_deliveries = frozenset(
+			row.get("name") for row in delivery_headers if row.get("docstatus") == 2
+		)
+
 		# The record names this site already uses, restricted to the caller's companies for the
 		# headers — a record of another company is not a name a caller may be told about. The child
 		# names are asked for by the parents that survived, so the same rule reaches them.
@@ -1032,6 +1174,13 @@ class FrappeGateway:
 			invoices=invoices,
 			cancelled_invoices=cancelled_invoices,
 			invoice_rows=frozenset((row.get("parent"), row.get("name")) for row in item_rows),
+			deliveries=deliveries,
+			cancelled_deliveries=cancelled_deliveries,
+			# The row of each named note that carries the invoice row — the value the write derives
+			# and stores, computed over the same ordering `serial_link._delivery_row` uses, so the
+			# plan's output and the stored row cannot disagree about which shipment row a
+			# registration belongs to.
+			delivery_rows=self._delivery_rows(tuple(deliveries)),
 			# The cap an operator meets while scanning, given to the planner as the row's own
 			# invoiced quantity. Counted from the assignments already read above, so an import
 			# measures a row against what it actually holds rather than against what a file says.
@@ -1122,22 +1271,7 @@ class FrappeGateway:
 
 	def _by_names(self, doctype, names, fields):
 		"""Rows of one DocType whose name is in `names`, asked in chunks."""
-		rows = []
-
-		for chunk in _chunks(tuple(names)):
-			if not chunk:
-				continue
-
-			rows.extend(
-				frappe.get_all(
-					doctype,
-					filters={"name": ["in", chunk]},
-					fields=list(fields),
-					limit_page_length=0,
-				)
-			)
-
-		return tuple(rows)
+		return _rows_by_names(doctype, names, fields)
 
 	def _invoice_rows(self, invoice_names):
 		"""Every item row of these invoices, with the quantity it is allowed to carry.
@@ -1163,6 +1297,40 @@ class FrappeGateway:
 			)
 
 		return tuple(rows)
+
+	def _delivery_rows(self, delivery_names):
+		"""`(delivery note, invoice row name) -> delivery row name`, first row wins.
+
+		The same answer `serial_link._delivery_row` derives on the write path, over the same
+		ordering, so the plan can state the value the insert will store instead of carrying a name
+		from another site's numbering. A **return** delivery row carries `dn_detail` and no
+		`si_detail` — the framework does not copy it forward — so a returned shipment has no entry
+		here, which is how a row naming one is refused as incomplete rather than silently linked to
+		the forward row it happens to sit on.
+		"""
+		rows = []
+
+		for chunk in _chunks(tuple(delivery_names)):
+			if not chunk:
+				continue
+
+			rows.extend(
+				frappe.get_all(
+					DELIVERY_ITEM_DOCTYPE,
+					filters={"parent": ["in", chunk], "parenttype": DELIVERY_DOCTYPE},
+					fields=["parent", "name", "si_detail"],
+					order_by="parent asc, idx asc, name asc",
+					limit_page_length=0,
+				)
+			)
+
+		answer = {}
+
+		for row in rows:
+			if row.get("si_detail"):
+				answer.setdefault((row.get("parent"), row.get("si_detail")), row.get("name"))
+
+		return answer
 
 	# --- settings ----------------------------------------------------------------
 
@@ -1209,6 +1377,115 @@ def _chunks(values, size=IN_CHUNK):
 
 	for start in range(0, len(values), size):
 		yield values[start : start + size]
+
+
+def other_delivery_links(identities):
+	"""Delivery links of the **other** registrations of the same serial identities.
+
+	`identities` are `(item_code, normalized_serial)` pairs. The answer maps each identity to
+	the `(delivery_note, docstatus, per_returned)` triples of the registrations that name the
+	same serial on any invoice, so `core.delivery.conflicting_delivery` can decide whether one of
+	them is still holding the unit in a different shipment.
+
+	Read by normalized text rather than through `Logistics Serial`, because an identity with no
+	serial record yet cannot be referenced, and the question is about the identity. The item code
+	is matched in Python: `get_all` cannot express a tuple of pairs, and a normalized serial is
+	specific enough that the candidate rows are few.
+
+	Registrations with no delivery are left out. They are the pre-existing acknowledgement case —
+	a serial named on two invoices — and calling that a delivery conflict would be a new rule.
+	"""
+	wanted = tuple(sorted({identity for identity in identities if identity and identity[1]}))
+
+	if not wanted:
+		return {}
+
+	normalized = tuple(dict.fromkeys(identity[1] for identity in wanted))
+	rows = []
+
+	for chunk in _chunks(normalized):
+		rows.extend(
+			frappe.get_all(
+				ASSIGNMENT_DOCTYPE,
+				filters={"normalized_serial": ["in", chunk], "delivery_note": ["is", "set"]},
+				fields=["item_code", "normalized_serial", "delivery_note"],
+				limit_page_length=0,
+			)
+		)
+
+	notes = {
+		note.get("name"): note
+		for note in _rows_by_names(
+			DELIVERY_DOCTYPE,
+			{row.get("delivery_note") for row in rows if row.get("delivery_note")},
+			["name", "docstatus", "per_returned"],
+		)
+	}
+
+	grouped = {identity: [] for identity in wanted}
+
+	for row in rows:
+		identity = (row.get("item_code"), row.get("normalized_serial"))
+
+		if identity not in grouped:
+			continue
+
+		note = notes.get(row.get("delivery_note")) or {}
+
+		grouped[identity].append(
+			(
+				row.get("delivery_note"),
+				int(note.get("docstatus") or 0),
+				float(note.get("per_returned") or 0),
+			)
+		)
+
+	return grouped
+
+
+def _rows_by_names(doctype, names, fields):
+	"""Rows of one DocType whose name is in `names`, asked in chunks."""
+	rows = []
+
+	for chunk in _chunks(tuple(name for name in names if name)):
+		if not chunk:
+			continue
+
+		rows.extend(
+			frappe.get_all(
+				doctype,
+				filters={"name": ["in", chunk]},
+				fields=list(fields),
+				limit_page_length=0,
+			)
+		)
+
+	return tuple(rows)
+
+
+def _candidate(row, note, invoice_item):
+	"""One `DeliveryCandidate` from a Delivery Note item row and its parent's facts.
+
+	`is_return` comes from the **parent document**, not from the sign of the quantity. A return
+	Delivery Note is the document that says "this moved back"; a negative quantity on a forward
+	delivery is a data-entry mistake in a document that has not been submitted and cannot be
+	submitted, and reading it as a return would net it against a shipment that never happened.
+	"""
+	note = note or {}
+	docstatus = int(note.get("docstatus") or 0)
+
+	return delivery_rules.DeliveryCandidate(
+		delivery_note=row.get("parent"),
+		delivery_note_item=row.get("name"),
+		invoice_item=invoice_item,
+		delivery_date=note.get("posting_date"),
+		qty=float(row.get("qty") or 0),
+		docstatus=docstatus,
+		is_return=bool(note.get("is_return")),
+		per_returned=float(note.get("per_returned") or 0),
+		warehouse=row.get("warehouse"),
+		against_detail=row.get("dn_detail"),
+	)
 
 
 def _count_by_row(assignments):

@@ -402,6 +402,101 @@
 	padding: 0 6px;
 }
 
+/* The shipment a row's labels left with, between the header and the labels themselves.
+ *
+ * The three states are the server's own answers from `core.delivery.select_delivery`, drawn and
+ * not re-decided here: **linked** is the ordinary case and stays plain; **provisional** means the
+ * goods have not shipped, so the labels are real but unconfirmed and the line says so; **choice**
+ * is the only state in this window that asks the operator something, and the question sits where
+ * the answer will be read — under the counts, above the labels.
+ *
+ * Provisional is not red. Nothing is wrong with the invoice; the goods simply have not left, and
+ * painting that error-red would teach the operator to ignore red where it does matter.
+ *
+ * Its counts class is its own and not the header's: `draw_row` writes the invoice counts through
+ * `.sp-scan-counts`, and a second element with that class in the same column would receive both. */
+.sp-scan-delivery {
+	background: var(--control-bg);
+	border-bottom: 1px solid var(--border-color);
+	color: var(--text-muted);
+	display: flex;
+	flex-direction: column;
+	font-size: var(--text-xs);
+	gap: 4px;
+	padding: 4px 10px 6px;
+}
+
+.sp-scan-delivery.is-provisional {
+	background: var(--orange-100);
+	color: var(--orange-700);
+}
+
+.sp-scan-delivery.is-choice {
+	border-inline-start: 3px solid var(--orange-500);
+}
+
+.sp-scan-delivery-counts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.sp-scan-delivery-note {
+	display: block;
+	overflow-wrap: anywhere;
+}
+
+.sp-scan-delivery-note.is-provisional {
+	color: var(--orange-700);
+}
+
+.sp-scan-delivery-note.is-short {
+	color: var(--orange-700);
+	font-weight: 600;
+}
+
+/* The answer itself, full width of the column so the chosen shipment is readable at a glance. */
+.sp-scan-delivery select {
+	width: 100%;
+}
+
+/* A stored label whose shipment is no longer what it was when the label was scanned. Only the
+ * states that change how the label should be read are marked — a delivered one and one on a draft
+ * shipment are both ordinary — because a badge on every cell is a badge nobody reads. */
+.sp-scan-badge {
+	border-radius: var(--border-radius);
+	flex: 0 0 auto;
+	font-size: var(--text-xs);
+	padding: 0 4px;
+	white-space: nowrap;
+}
+
+.sp-scan-badge.is-unlinked {
+	background: var(--orange-100);
+	color: var(--orange-700);
+}
+
+.sp-scan-badge.is-draft {
+	background: var(--blue-100);
+	color: var(--blue-700);
+}
+
+.sp-scan-badge.is-cancelled {
+	background: var(--red-100);
+	color: var(--red-700);
+}
+
+.sp-scan-badge.is-returned {
+	background: var(--orange-100);
+	color: var(--orange-700);
+}
+
+.sp-scan-badge.is-unknown {
+	background: var(--control-bg);
+	border: 1px solid var(--border-color);
+	color: var(--text-muted);
+}
+
 .sp-scan-empty {
 	color: var(--text-muted);
 	font-size: var(--text-sm);

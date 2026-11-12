@@ -99,4 +99,12 @@ def approved_doc_events():
 		"Stock Reservation Entry": {
 			"validate": "smartprocess_logistics.warehouse.sales.validate_stock_reservation_entry",
 		},
+		# The app's own DocType, held to the rules `core/assignment.py` states. Its controller is
+		# empty on purpose (`tests/test_doctype_controllers.py`), so a registration is checked
+		# here, and here is the only layer a Desk form, `frappe.client` and the REST API all pass
+		# through. Removal leaves a trace on the invoice and never touches `Logistics Serial`.
+		"Logistics Serial Assignment": {
+			"validate": "smartprocess_logistics.serial_link.validate_assignment",
+			"on_trash": "smartprocess_logistics.serial_link.audit_deletion",
+		},
 	}

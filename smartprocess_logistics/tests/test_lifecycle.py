@@ -763,6 +763,7 @@ class HooksRegistrationTest(UnitTestCase):
 				"Purchase Receipt",
 				"Stock Entry",
 				"Stock Reservation Entry",
+				"Logistics Serial Assignment",
 			},
 		)
 		self.assertEqual(
@@ -803,7 +804,12 @@ class HooksRegistrationTest(UnitTestCase):
 				"Purchase Receipt",
 				"Stock Entry",
 				"Stock Reservation Entry",
+				"Logistics Serial Assignment",
 			},
+		)
+		self.assertEqual(
+			set(doc_events["Logistics Serial Assignment"]),
+			{"validate", "on_trash"},
 		)
 
 	def test_the_app_requires_frappe_and_erpnext(self):

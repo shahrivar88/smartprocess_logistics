@@ -19,11 +19,12 @@ and only the first three are enforceable from application code:
    `Logistics Serial` controller refuses a change to it, and a correction is an explicit,
    authorized replacement: the registration is removed and a new one is added. Because the
    referenced value cannot change, a stored copy cannot go stale through use.
-3. **Checked on every allowed write.** The future `Logistics Serial Assignment` controller
-   re-derives the copy from the linked serial and refuses a mismatch, so a document edited
-   through the Desk, through `frappe.client`, or through the REST API cannot introduce one.
-   `RUNTIME_ENFORCEMENT` records exactly what that controller has to do, so the requirement
-   survives until the code exists.
+3. **Checked on every allowed write.** The `Logistics Serial Assignment` document events
+   (`smartprocess_logistics/serial_link.py`, registered in `hooks_composition.py`) re-derive the
+   copy from the linked serial and refuse a mismatch, so a document edited through the Desk,
+   through `frappe.client`, or through the REST API cannot introduce one. The same events derive
+   `delivery_note_item` from the named delivery and refuse a delivery link that the invoice row
+   does not have. `RUNTIME_ENFORCEMENT` records exactly what those events do.
 4. **Not enforceable against raw SQL.** An `INSERT` or `UPDATE` issued directly against
    `tabLogistics Serial Assignment` bypasses the controller and can write any copy it likes.
    Nothing in Frappe intercepts that, and adding a database trigger would introduce schema the
@@ -44,16 +45,19 @@ CODE_IDENTITY_MISMATCH = "ASSIGNMENT_IDENTITY_MISMATCH"
 CODE_IDENTITY_SUPPLIED = "ASSIGNMENT_IDENTITY_SUPPLIED"
 CODE_SERIAL_MISSING = "ASSIGNMENT_SERIAL_MISSING"
 
-# The field a request must never carry, because the server derives it.
-DERIVED_FIELDS = ("normalized_serial",)
+# The fields a request must never carry, because the server derives them.
+DERIVED_FIELDS = ("normalized_serial", "delivery_note_item")
 
-# What the `Logistics Serial Assignment` controller has to do once runtime code is allowed.
+# What the `Logistics Serial Assignment` document events must do.
 RUNTIME_ENFORCEMENT = (
 	"in `validate`, if the document is new: read the linked `Logistics Serial` and set "
 	"`normalized_serial` to its `normalized_serial`; never read it from the request",
+	"in `validate`, if the document is new and names a delivery note: read the delivery row of "
+	"that note that fulfils this invoice row and set `delivery_note_item` to its name; never "
+	"read it from the request, and refuse a delivery note the row does not belong to",
 	"in `validate`, if the document is not new: refuse an edit to `logistics_serial`, "
-	"`sales_invoice`, `sales_invoice_item` or `normalized_serial`, because an assignment is "
-	"created or replaced, never edited",
+	"`sales_invoice`, `sales_invoice_item`, `normalized_serial`, `delivery_note` or "
+	"`delivery_note_item`, because an assignment is created or replaced, never edited",
 	"in `validate`, compare the stored `normalized_serial` with the linked serial's and refuse "
 	"a mismatch, so a value written by a path that skipped the derivation is caught on the "
 	"next write",
@@ -94,6 +98,8 @@ class AssignmentValues:
 	item_code: str
 	normalized_serial: str
 	invoice_item_idx: int | None
+	delivery_note: str | None = None
+	delivery_note_item: str | None = None
 
 
 def derive_assignment_values(
@@ -105,13 +111,31 @@ def derive_assignment_values(
 	sales_invoice_item,
 	company,
 	row_index=None,
+	delivery_note=None,
+	delivery_note_item=None,
 ):
 	"""Build the stored values for a new assignment.
 
 	`serial` is the `NormalizedSerial` of the referenced `Logistics Serial`, which the caller
 	has already read back from the database, and `serial_name` and `item_code` are that
 	document's own values. Nothing here is read from a request.
+
+	`delivery_note` is the delivery an operator selected or that the row's single live delivery
+	supplied; `delivery_note_item` is always the server's own answer, resolved from that note.
+	The two are stored together or not at all: a note without its row would be a link nobody
+	can verify, and a row without its note would be a dangling reference.
 	"""
+	if (delivery_note is None) != (delivery_note_item is None):
+		raise AssignmentIdentityError(
+			CODE_SERIAL_MISSING,
+			"رسید تحویل و ردیف رسید تحویل باید با هم باشند یا هر دو تهی باشند.",
+		)
+
+	if delivery_note is not None:
+		for value, label in ((delivery_note, "رسید تحویل"), (delivery_note_item, "ردیف رسید تحویل")):
+			if not isinstance(value, str) or not value.strip():
+				raise AssignmentIdentityError(CODE_SERIAL_MISSING, f"{label} باید مقدار داشته باشد.")
+
 	if not isinstance(serial, NormalizedSerial):
 		raise AssignmentIdentityError(CODE_SERIAL_MISSING, "سریال مرجع داده نشده است.")
 
@@ -137,6 +161,8 @@ def derive_assignment_values(
 		item_code=item_code,
 		normalized_serial=serial.normalized,
 		invoice_item_idx=row_index,
+		delivery_note=delivery_note,
+		delivery_note_item=delivery_note_item,
 	)
 
 

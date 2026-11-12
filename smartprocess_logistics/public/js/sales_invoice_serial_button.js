@@ -986,6 +986,11 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 		// One timer for the window's warning line. Held here rather than on the element so a
 		// second rejection restarts it — the first warning's expiry must never clear the newer one.
 		warning_timer: null,
+		// row_key -> the delivery note the operator picked for that row. The server asks only when
+		// a row has more than one live shipment, and this is where the answer waits until the save
+		// that carries it. It is kept after a save on purpose: the next batch of labels usually
+		// leaves with the same shipment, and the operator did not scan them to answer that again.
+		delivery: {},
 	};
 
 	const row_of = (row_key) =>
@@ -1044,6 +1049,161 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 			});
 	};
 
+	/**
+	 * What one stored registration's delivery link means **now**, as a mark on the cell.
+	 *
+	 * `delivery_state` is the server's reading of the link against the documents as they stand —
+	 * a shipment cancelled after the label was registered leaves the registration exactly where
+	 * it was, and this is how the window says so instead of drawing the label as delivered. Only
+	 * the states that change how a label should be read are marked; a delivered one and one on a
+	 * draft shipment are both ordinary, and a badge on every cell is a badge nobody reads.
+	 */
+	const link_badge = function (delivery_state) {
+		const marks = {
+			UNLINKED: ["موقت", "این سریال به رسید تحویل وصل نیست و در وضعیت تأییدشده حساب نمی‌شود."],
+			DRAFT: ["پیش‌نویس", "رسید تحویل این سریال هنوز ارسال نشده است."],
+			CANCELLED: ["لغو‌شده", "رسید تحویل این سریال لغو شده است."],
+			RETURNED: ["برگشتی", "رسید تحویل این سریال برگشت خورده است."],
+			UNKNOWN: ["نامشخص", "رسید تحویل این سریال پیدا نشد."],
+		};
+		const mark = marks[delivery_state];
+
+		if (!mark) {
+			return "";
+		}
+
+		return `<span class="sp-scan-badge is-${smartprocess_logistics.escape(
+			String(delivery_state).toLowerCase()
+		)}" title="${__(mark[1])}">${__(mark[0])}</span>`;
+	};
+
+	/**
+	 * One delivery note's line in the choice list: its name, its date, its warehouse and how much
+	 * it moved. The quantity is what an operator recognises a shipment by when two notes carry
+	 * the same date, and the warehouse is what tells a partial shipment from a transfer.
+	 */
+	const delivery_option_text = function (candidate) {
+		const parts = [candidate.delivery_note];
+
+		if (candidate.delivery_date) {
+			parts.push(candidate.delivery_date);
+		}
+
+		if (candidate.warehouse) {
+			parts.push(candidate.warehouse);
+		}
+
+		parts.push(__("{0} عدد", [candidate.qty]));
+
+		return parts.join(" — ");
+	};
+
+	/** The class that paints one delivery state, derived from the server's own vocabulary. */
+	const delivery_state_class = function (status) {
+		const classes = {
+			LINKED: " is-linked",
+			PROVISIONAL: " is-provisional",
+			CHOICE_REQUIRED: " is-choice",
+		};
+
+		return classes[status] || "";
+	};
+
+	/**
+	 * The row's shipment facts, and the question when there is more than one answer.
+	 *
+	 * The numbers are measured against what actually left, not against the invoiced quantity: a
+	 * row of ten delivered in two shipments of five is five labels short after the first shipment,
+	 * not ten. `تأییدشده` counts the labels a completed delivery holds and `موقت` those that named
+	 * no shipment at all, so a row can be full of labels and still have none of them confirmed.
+	 *
+	 * The delivery is the server's decision, drawn exactly as it drew it: one live shipment is
+	 * linked without being asked about, none is registered provisionally, and several become the
+	 * `<select>` — asked here, answered once, and sent with every save of that row. Nothing on
+	 * this screen guesses which shipment a label belongs to.
+	 */
+	const delivery_box_html = function (row) {
+		// An invoice with no delivery notes at all keeps the header it always had. There is
+		// nothing to say about a shipment that does not exist, and a permanent "unlinked" badge
+		// over every column would read as an error on an ordinary invoice.
+		if (!row.delivery) {
+			return "";
+		}
+
+		const facts = row.delivery;
+		const open = (facts.candidates || []).filter(
+			(candidate) => !candidate.is_return && candidate.docstatus !== 2
+		);
+		const counts = [
+			`<span class="sp-scan-count">${__("ارسال‌شده")} <b>${facts.delivered}</b></span>`,
+			`<span class="sp-scan-count ${facts.missing ? "is-short" : "is-ok"}">${__(
+				"کسری تحویل"
+			)} <b>${facts.missing}</b></span>`,
+		];
+
+		if (facts.confirmed) {
+			counts.push(
+				`<span class="sp-scan-count is-ok">${__("تأییدشده")} <b>${facts.confirmed}</b></span>`
+			);
+		}
+
+		if (facts.provisional) {
+			counts.push(
+				`<span class="sp-scan-count is-waiting">${__("موقت")} <b>${
+					facts.provisional
+				}</b></span>`
+			);
+		}
+
+		// What the row is linked to, or why it is not linked to anything. `note` is the server's
+		// own answer and is `null` for a row that is provisional or ambiguous, so the three
+		// cases cannot drift apart from what the write path will do.
+		let state_line = "";
+
+		if (facts.state === "LINKED" && facts.note) {
+			state_line = `<span class="sp-scan-delivery-note">${__(
+				"رسید تحویل"
+			)}: ${smartprocess_logistics.escape(facts.note)}</span>`;
+		} else if (facts.state === "PROVISIONAL") {
+			state_line = `<span class="sp-scan-delivery-note is-provisional">${__(
+				"بدون رسید تحویل — ثبت موقت"
+			)}</span>`;
+		} else if (facts.state === "CHOICE_REQUIRED") {
+			state_line = `<span class="sp-scan-delivery-note is-short">${__(
+				"چند رسید تحویل — یکی را انتخاب کنید"
+			)}</span>`;
+		}
+
+		let select = "";
+
+		if (facts.state === "CHOICE_REQUIRED") {
+			const chosen = state.delivery[row.row_key] || "";
+			const options = open
+				.map(
+					(candidate) =>
+						`<option value="${smartprocess_logistics.escape(
+							candidate.delivery_note
+						)}"${candidate.delivery_note === chosen ? " selected" : ""}>${smartprocess_logistics.escape(
+							delivery_option_text(candidate)
+						)}</option>`
+				)
+				.join("");
+
+			select = `<select class="form-control input-xs sp-scan-delivery" data-row-key="${smartprocess_logistics.escape(
+				row.row_key
+			)}"><option value="">${__("رسید تحویل را انتخاب کنید")}</option>${options}</select>`;
+		}
+
+		// Its own counts class, not the header's: the header's counts are written by `draw_row`
+		// through `.sp-scan-counts`, and a second element with that class in the same column would
+		// receive the invoice counts as well as the shipment ones.
+		return `<div class="sp-scan-delivery${delivery_state_class(facts.state)}">
+			<div class="sp-scan-delivery-counts">${counts.join("")}</div>
+			${state_line}
+			${select}
+		</div>`;
+	};
+
 	/** Draw a column from one server row, and announce a completion if this is one. */
 	const draw_row = function (row, announce) {
 		const column = dialog.$wrapper.find(`.sp-scan-column[data-row-key="${CSS.escape(row.row_key)}"]`);
@@ -1069,7 +1229,7 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 				}" data-assignment="${smartprocess_logistics.escape(entry.name)}">
 					<span class="sp-scan-serial">${smartprocess_logistics.escape(
 						entry.serial_no || entry.normalized_serial
-					)}</span>
+					)}</span>${link_badge(entry.delivery_state)}
 					<button type="button" class="sp-scan-icon" data-action="delete-one"
 						data-assignment="${smartprocess_logistics.escape(entry.name)}"
 						title="${__("حذف این سریال")}"
@@ -1151,6 +1311,11 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 			.find(".sp-scan-tick")
 			.text(state_name === "SAVED" ? "✓" : "")
 			.attr("aria-hidden", "true");
+		// The shipment line, redrawn from the same row the counts come from. The operator's choice
+		// is carried in `state.delivery` rather than read back from the DOM, so a redraw that
+		// happens mid-choice cannot silently drop the answer they already gave.
+		column.find(".sp-scan-delivery-box").html(delivery_box_html(row));
+
 		column.find(".sp-scan-cells").html(
 			cells || `<div class="sp-scan-empty">${__("سریالی ثبت نشده است.")}</div>`
 		);
@@ -1209,6 +1374,7 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 				<div class="sp-scan-index">#${row.row_index}</div>
 				<div class="sp-scan-counts"></div>
 			</header>
+			<div class="sp-scan-delivery-box"></div>
 			<div class="sp-scan-entry">
 				<input type="text" class="form-control sp-scan-input"
 					data-row-key="${smartprocess_logistics.escape(row.row_key)}"
@@ -1302,6 +1468,19 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 		}
 	};
 
+	// The counters are replaced in place from whatever `state.status` now holds. Every answer
+	// that carries a fresh summary goes through here, so the chips never show a total the
+	// station has already moved past.
+	const render_summary = function () {
+		if (!state.status || !state.status.summary) {
+			return;
+		}
+
+		dialog.fields_dict.body.$wrapper.find(".sp-logistics-summary").replaceWith(
+			smartprocess_logistics.summary_html(state.status.summary)
+		);
+	};
+
 	const load_status = function (announce) {
 		return smartprocess_logistics
 			.call("get_invoice_serial_status", { sales_invoice: frm.doc.name })
@@ -1313,9 +1492,7 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 				}
 
 				state.status = status;
-				dialog.fields_dict.body.$wrapper.find(".sp-logistics-summary").replaceWith(
-					smartprocess_logistics.summary_html(status.summary)
-				);
+				render_summary();
 				(status.rows || []).forEach((row) => draw_row(row, Boolean(announce)));
 
 				return status;
@@ -1847,6 +2024,10 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 							sales_invoice: frm.doc.name,
 							sales_invoice_item: row_key,
 							serials: JSON.stringify(waiting.map((entry) => entry.serial)),
+							// The operator's answer to "which shipment?", when the row has more
+							// than one. Absent for a row with a single delivery — the server links
+							// that one itself — and for a row with none, which stays provisional.
+							delivery_note: state.delivery[row_key] || null,
 						})
 						.then((answer) => {
 							state.dirty = true;
@@ -1854,6 +2035,10 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 							if (answer && answer.row) {
 								remember_row(answer.row);
 								state.status.summary = answer.summary || state.status.summary;
+
+								// The save's answer already carries the invoice's totals, so the
+								// chips move now rather than waiting for a manual refresh.
+								render_summary();
 							}
 
 							// The labels leave the waiting list *before* the redraw, so the column is
@@ -1900,6 +2085,10 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 	 * because one column was too full, and the operator's correction is one delete rather than a
 	 * repair. The server's own limit is untouched and still decides: if another operator filled the
 	 * row between this check and the request, the refusal arrives per label and is reported.
+	 *
+	 * A row whose delivery is ambiguous is checked first and by name, because it is the one thing
+	 * here only a person can answer: the labels are fine, the row is fine, and what is missing is
+	 * which shipment they left with.
 	 */
 	const save_pending = function () {
 		if (state.saving) {
@@ -1907,6 +2096,7 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 		}
 
 		const blocked = [];
+		const ambiguous = [];
 		const to_save = [];
 
 		Object.keys(state.pending).forEach((row_key) => {
@@ -1919,12 +2109,37 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 
 			const counts = smartprocess_logistics.pending_counts(row, waiting.length);
 
+			// A row with more than one live delivery cannot be written until the operator says
+			// which one these labels left with. The server would refuse the batch as a whole for
+			// the same reason; asking here is what turns that refusal into one sentence before
+			// anything is sent, instead of one refusal per column after it.
+			if ((row.delivery || {}).state === "CHOICE_REQUIRED" && !state.delivery[row_key]) {
+				ambiguous.push(row.model || row.item_code || row_key);
+
+				return;
+			}
+
 			if (counts.excess) {
 				blocked.push({ model: row.model || row.item_code, excess: counts.excess });
 			} else {
 				to_save.push(row_key);
 			}
 		});
+
+		if (ambiguous.length) {
+			const message = __("برای این ردیف‌ها ابتدا رسید تحویل را انتخاب کنید: {0}", [
+				ambiguous.join("، "),
+			]);
+
+			warn(message);
+			frappe.msgprint({
+				indicator: "orange",
+				message: message,
+				title: __("انتخاب رسید تحویل"),
+			});
+
+			return;
+		}
 
 		if (blocked.length) {
 			const message = smartprocess_logistics.save_blocked_message(blocked);
@@ -2543,6 +2758,27 @@ smartprocess_logistics.open_serial_dialog = function (frm) {
 	dialog.fields_dict.body.$wrapper.on("change", ".sp-scan-sound-toggle", function () {
 		smartprocess_logistics.set_sound_enabled($(this).prop("checked"));
 		smartprocess_logistics.unlock_audio();
+	});
+
+	// The operator's answer to "which shipment?", remembered per row and sent with that row's
+	// next save. Nothing is written here: the labels that are already in the database keep the
+	// delivery they were registered with, and changing this list changes only where the labels
+	// still waiting on this screen will go. Correcting a stored one is a delete and a re-register
+	// — the same two acts the window already offers for a mistyped serial.
+	// `select.` is load-bearing: the box around the list carries the same class, and a bare
+	// `.sp-scan-delivery` fires this a second time for the box, whose `val()` is empty — which
+	// deletes the answer the select just gave.
+	dialog.fields_dict.body.$wrapper.on("change", "select.sp-scan-delivery", function () {
+		const row_key = $(this).closest(".sp-scan-column").attr("data-row-key");
+		const value = $(this).val() || "";
+
+		if (value) {
+			state.delivery[row_key] = value;
+		} else {
+			delete state.delivery[row_key];
+		}
+
+		flash(row_key, value ? __("رسید تحویل انتخاب شد.") : "", true);
 	});
 
 	dialog.fields_dict.body.$wrapper.on("click", "[data-action]", function () {

@@ -52,10 +52,16 @@ Retry rules, because a caller has to know them:
 from dataclasses import dataclass, field
 
 from smartprocess_logistics.core import authz
+from smartprocess_logistics.core import delivery as delivery_rules
 from smartprocess_logistics.core import session as session_rules
 from smartprocess_logistics.core.assignment import derive_assignment_values
 from smartprocess_logistics.core.authz import InvoiceRef, require_invoice_access
-from smartprocess_logistics.core.validation import ExistingAssignment, plan_registration
+from smartprocess_logistics.core.validation import (
+	CODE_DELIVERY_CHOICE_REQUIRED,
+	CODE_DELIVERY_NOT_A_CANDIDATE,
+	ExistingAssignment,
+	plan_registration,
+)
 
 LOCK_ORDER = (
 	"logistics_import_session",
@@ -99,6 +105,8 @@ GATEWAY_METHODS = (
 	"lock_invoice",
 	"read_rows",
 	"read_existing",
+	"delivery_candidates",
+	"delivery_links",
 	"lock_serials",
 	"delete_row_assignments",
 	"find_or_create_serials",
@@ -171,7 +179,14 @@ class Step:
 
 @dataclass(frozen=True)
 class RewritePlan:
-	"""Everything a write needs, checked as far as it can be before a lock is taken."""
+	"""Everything a write needs, checked as far as it can be before a lock is taken.
+
+	`selections` pairs a row key with the delivery note an operator named for it. It is the
+	caller's request and nothing else: the delivery rows themselves are **not** on the plan,
+	because they are read inside the transaction. A plan built from a stale read would decide a
+	row's delivery from a document that has since been cancelled or amended, and the decision
+	would look as trustworthy as one made under the lock.
+	"""
 
 	invoice_name: str
 	company: str
@@ -181,6 +196,7 @@ class RewritePlan:
 	delimiters: tuple = ()
 	policy: object = None
 	only_rows: tuple = ()
+	selections: tuple = ()
 
 	def row_keys(self):
 		return tuple(row.row_key for row in self.rows)
@@ -263,6 +279,7 @@ def build_rewrite_plan(
 	only_rows=(),
 	delimiters=(),
 	policy=None,
+	selections=(),
 ):
 	"""Check what can be checked before a lock is taken, and lay out the rewrite."""
 	if invoice is None or not isinstance(invoice, InvoiceRef):
@@ -281,6 +298,18 @@ def build_rewrite_plan(
 	if unknown:
 		raise OrchestrationError(CODE_ROW_UNKNOWN, "ردیف فاکتور پیدا نشد: " + "، ".join(unknown))
 
+	# A selection names the delivery an operator chose for one row. A selection for a row this
+	# invoice does not have cannot be honoured, and dropping it silently would let the request
+	# appear to have been obeyed while the serials went to a different row's delivery.
+	selections = tuple(selections)
+	unknown_selections = sorted({row_key for row_key, _note in selections if row_key not in known_rows})
+
+	if unknown_selections:
+		raise OrchestrationError(
+			CODE_ROW_UNKNOWN,
+			"ردیف فاکتور پیدا نشد: " + "، ".join(unknown_selections),
+		)
+
 	steps = tuple(Step(kind) for kind in REWRITE_STEPS)
 	check_lock_order(steps)
 
@@ -293,6 +322,7 @@ def build_rewrite_plan(
 		delimiters=tuple(delimiters),
 		policy=policy,
 		only_rows=tuple(only_rows),
+		selections=selections,
 	)
 
 
@@ -305,6 +335,7 @@ def build_append_plan(
 	serials,
 	principal,
 	policy=None,
+	delivery_note=None,
 ):
 	"""Serials added to one row, keeping everything else that row already holds.
 
@@ -331,6 +362,12 @@ def build_append_plan(
 	"""
 	serials = tuple(serials)
 
+	# `delivery_note` is the operator's answer to "which shipment did these leave with?", asked
+	# only when the row has more than one live delivery. It is carried as a selection rather than
+	# resolved here: the delivery rows are read under the lock, and choosing from a list read
+	# before the transaction is how a serial ends up attached to a delivery that changed.
+	selections = ((row_key, delivery_note),) if delivery_note else ()
+
 	return build_rewrite_plan(
 		invoice=invoice,
 		rows=rows,
@@ -340,6 +377,7 @@ def build_append_plan(
 		only_rows=(),
 		delimiters=(),
 		policy=policy,
+		selections=selections,
 	)
 
 
@@ -405,6 +443,17 @@ def run_rewrite(plan, gateway):
 	# turn.
 	existing = tuple(gateway.read_existing(plan.invoice_name, for_update=True))
 
+	# The delivery rows that carry this invoice's rows, read here for the same reason the rows
+	# above are: the link a serial is written with has to be decided on the documents as they
+	# are now. Every row of the invoice is read, not only the ones being written, because the
+	# validator refuses a mapping that skipped a row — and that refusal is deliberate. A row
+	# whose delivery was never looked up must not be read as "no delivery"; that would mark a
+	# linked shipment as provisional, which is the one way this rule may never fail.
+	deliveries = gateway.delivery_candidates(
+		plan.invoice_name,
+		tuple(row.row_key for row in rows),
+	)
+
 	# The rows whose whole set is written again, and therefore the rows whose stored assignments
 	# the validator must count out: the ones a caller named as replaced. `set_row_serials` names
 	# one row, an import names none — an import adds to a row that may already hold serials the
@@ -421,6 +470,8 @@ def run_rewrite(plan, gateway):
 		replaced_rows=rewrite_rows,
 		delimiters=plan.delimiters,
 		policy=plan.policy,
+		deliveries=deliveries,
+		selections=dict(plan.selections),
 	)
 
 	if not result.is_valid:
@@ -440,6 +491,8 @@ def run_rewrite(plan, gateway):
 
 	for row_key in rewrite_rows:
 		deleted += gateway.delete_row_assignments(plan.invoice_name, row_key)
+
+	_check_delivery_conflicts(plan, result, gateway)
 
 	# The rule set that produced each identity is carried with it, not looked up. A serial that
 	# is created records the version that normalized *it*, so a later change of rules leaves the
@@ -472,6 +525,8 @@ def run_rewrite(plan, gateway):
 				sales_invoice=plan.invoice_name,
 				sales_invoice_item=item.row_key,
 				company=plan.company,
+				delivery_note=item.delivery_note,
+				delivery_note_item=item.delivery_note_item,
 			)
 		)
 
@@ -489,6 +544,49 @@ def run_rewrite(plan, gateway):
 			else f"{len(values)} سریال ثبت شد."
 		),
 		steps=tuple(REWRITE_STEPS),
+	)
+
+
+def _check_delivery_conflicts(plan, result, gateway):
+	"""Refuse a serial whose chosen delivery is already open in another shipment.
+
+	Run after the rows being rewritten have been cleared and before anything is written, so the
+	registrations compared against are exactly the ones that will remain: the row's own previous
+	registration cannot conflict with itself, and it is gone either way.
+
+	Only serials that resolved to a delivery are examined. A provisional registration names no
+	shipment, and the pre-existing rule that a serial may appear on two invoices stays as it was;
+	this refuses only the case where two **active deliveries** claim the same physical unit at
+	once. A delivery that was cancelled or fully returned released the unit, and `conflicting_delivery`
+	is what says so.
+	"""
+	selections = tuple(
+		((item.item_code, item.serial.normalized), item.delivery_note)
+		for item in result.accepted
+		if item.delivery_note is not None
+	)
+
+	if not selections:
+		return
+
+	others = gateway.delivery_links(tuple(identity for identity, _note in selections))
+	conflicts = frozenset(delivery_rules.find_conflicts(selections, others))
+
+	if not conflicts:
+		return
+
+	named = {
+		item.serial.original
+		for item in result.accepted
+		if (item.item_code, item.serial.normalized) in conflicts
+	}
+	shown = "، ".join(sorted(named)[:NAMED_SERIALS])
+	rest = len(named) - NAMED_SERIALS
+	suffix = f" و {rest} مورد دیگر" if rest > 0 else ""
+
+	raise OrchestrationError(
+		delivery_rules.CODE_DELIVERY_CONFLICT,
+		f"این سریال‌ها روی رسید تحویل فعال دیگری ثبت شده‌اند و هم‌زمان در دو تحویل باز نمی‌شوند ({shown}{suffix}).",
 	)
 
 
@@ -520,6 +618,15 @@ def is_retryable(error):
 			CODE_NO_SUBMISSIONS,
 			CODE_COMPANY_CHANGED,
 			CODE_ROW_UNKNOWN,
+			# A delivery decision is made from documents that did not change, so the same request
+			# fails the same way. Sending it again without choosing a delivery note, or without
+			# correcting a note that is not a candidate, cannot succeed.
+			CODE_DELIVERY_CHOICE_REQUIRED,
+			CODE_DELIVERY_NOT_A_CANDIDATE,
+			# A conflict is read from deliveries that did not change either. The unit is held
+			# elsewhere until that delivery is cancelled or returned, which is not something a
+			# second identical request can bring about.
+			delivery_rules.CODE_DELIVERY_CONFLICT,
 		)
 
 	if isinstance(error, session_rules.SessionError):

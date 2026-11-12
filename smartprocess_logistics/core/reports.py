@@ -15,8 +15,10 @@ The two reports differ in what they are *about*, and that difference drives most
 - **Sales Serial Register** lists assignments. Its grain is one assignment, and its natural
   order is the sales date.
 - **Missing Sales Serials** lists invoice item rows that should have serials and do not have
-  enough of them. Its grain is one row, and its registered count is what the grouped subquery
-  provides.
+  enough of them. Its grain is one row. What it is short of is measured against what was
+  **delivered**, not what was invoiced: serials label physical units, and a unit still in the
+  warehouse needs no label. The delivered figure is net of submitted returns, and each
+  registration's link state is decided by the same rules `core.delivery` applies in the dialog.
 
 What the missing report can and cannot know
 -------------------------------------------
@@ -45,6 +47,15 @@ report shows it, with `is_orphaned` set, so it is visible rather than lost.
 from dataclasses import dataclass, field
 
 from smartprocess_logistics.core.authz import visible_companies
+from smartprocess_logistics.core.delivery import (
+	FULLY_RETURNED_PERCENT,
+	LINK_CANCELLED,
+	LINK_DELIVERED,
+	LINK_DRAFT,
+	LINK_RETURNED,
+	LINK_UNKNOWN,
+	LINK_UNLINKED,
+)
 
 DEFAULT_PAGE_LENGTH = 50
 MAX_PAGE_LENGTH = 500
@@ -70,6 +81,22 @@ CODE_NO_CONDITION = "REPORT_NO_PERMISSION_CONDITIONS"
 # cheap guard against the day somebody passes one that came from somewhere else.
 FORBIDDEN_IN_CONDITION = (";", "--", "/*", "*/")
 
+# What a row's serials add up to, as one label. It follows the delivery, not the invoice: a row
+# whose units were never delivered cannot be missing a serial for them.
+SERIAL_STATE_NO_SERIALS = "NO_SERIALS"
+SERIAL_STATE_CANCELLED_OR_RETURNED = "CANCELLED_OR_RETURNED"
+SERIAL_STATE_PARTIAL = "PARTIAL"
+SERIAL_STATE_UNCONFIRMED = "UNCONFIRMED"
+SERIAL_STATE_COMPLETE = "COMPLETE"
+
+SERIAL_STATES = (
+	SERIAL_STATE_NO_SERIALS,
+	SERIAL_STATE_CANCELLED_OR_RETURNED,
+	SERIAL_STATE_PARTIAL,
+	SERIAL_STATE_UNCONFIRMED,
+	SERIAL_STATE_COMPLETE,
+)
+
 
 class ReportError(ValueError):
 	"""A report request that cannot be built. `code` is stable."""
@@ -92,9 +119,10 @@ class Query:
 	def select_count(self):
 		"""How many `SELECT` keywords the statement has.
 
-		Two is normal for the missing report, whose registered count comes from a subquery. More
-		than that means somebody has started building a per-row query, which is the N+1 this
-		module exists to avoid.
+		The count is a fixed property of the statement: `tests/test_reports.py` pins it. It is
+		read as a guard against a statement assembled per row — the N+1 this module exists to
+		avoid — because every extra `SELECT` here is a grouped CTE joined once, never a query
+		whose shape depends on how many rows the page holds.
 		"""
 		return self.sql.upper().count("SELECT")
 
@@ -282,7 +310,8 @@ class MissingFilters:
 	"""What the Missing Sales Serials report can be narrowed by.
 
 	`only_incomplete` defaults on: the report exists to show what is missing, and a caller that
-	wants the complete rows too can ask for them.
+	wants the complete rows too can ask for them. Incomplete means fewer serials than delivered
+	units; a row nothing was delivered for is not short.
 	"""
 
 	sales_invoice: str = None
@@ -331,7 +360,15 @@ MISSING_COLUMNS = (
 	"row_index",
 	"invoiced_qty",
 	"required_units",
+	"delivered_units",
 	"registered",
+	"missing_units",
+	"confirmed",
+	"unlinked",
+	"cancelled_or_returned",
+	"draft",
+	"unknown",
+	"serial_state",
 	"invoice_status",
 	"docstatus",
 	"company",
@@ -414,14 +451,38 @@ def build_missing_query(filters, principal, *, permission_conditions):
 		where.append("COALESCE(si.is_return, 0) = %(is_return)s")
 
 	if filters.only_incomplete:
-		where.append(f"COALESCE(a.registered, 0) < {REQUIRED_UNITS_SQL}")
+		# Short means "fewer serials than delivered units", so a row nothing was delivered for
+		# is not short. Deliveries are matched by invoice item row, which is what the CTE keys on.
+		where.append(
+			"COALESCE(a.registered, 0) < GREATEST(COALESCE(u.delivered_units, 0), 0)"
+		)
 
 	where += list(conditions)
 
-	# The two placeholders are filled from values built in this module. Every value that came
-	# from a caller is in `params`, not in the statement.
+	# The placeholders are filled from values built in this module. Every value that came from a
+	# caller is in `params`, not in the statement.
 	return Query(
-		sql=_MISSING_SQL.format(requirement=REQUIRED_UNITS_SQL, where=_where(where)),
+		sql=_MISSING_SQL.format(
+			requirement=REQUIRED_UNITS_SQL,
+			net_delivered="GREATEST(COALESCE(u.delivered_units, 0), 0)",
+			shortfall=(
+				"GREATEST(GREATEST(COALESCE(u.delivered_units, 0), 0)"
+				" - COALESCE(a.registered, 0), 0)"
+			),
+			unlinked=LINK_UNLINKED,
+			unknown=LINK_UNKNOWN,
+			cancelled=LINK_CANCELLED,
+			draft=LINK_DRAFT,
+			returned=LINK_RETURNED,
+			delivered=LINK_DELIVERED,
+			returned_percent=FULLY_RETURNED_PERCENT,
+			no_serials=SERIAL_STATE_NO_SERIALS,
+			cancelled_state=SERIAL_STATE_CANCELLED_OR_RETURNED,
+			partial_state=SERIAL_STATE_PARTIAL,
+			unconfirmed_state=SERIAL_STATE_UNCONFIRMED,
+			complete_state=SERIAL_STATE_COMPLETE,
+			where=_where(where),
+		),
 		params=params,
 		limit=limit,
 		offset=offset,
@@ -465,7 +526,109 @@ ORDER BY si.posting_date DESC, si.name ASC, lsa.sales_invoice_item ASC, lsa.name
 LIMIT %(limit)s OFFSET %(offset)s
 """
 
+# One statement, six grouped CTEs, and no per-row query. The shapes, in order:
+#
+# - `shipments` walks the invoice row's delivery note rows in both directions. A forward row
+#   carries `si_detail` and is keyed under its own note; a return row carries `dn_detail`, no
+#   `si_detail`, and is keyed under the note of the forward row it reverses. Splitting the two
+#   is what lets a row's delivered units be net of its returns without counting a return as
+#   shipped.
+# - `row_supply` sums those note-level totals per invoice row.
+# - `assignments` counts registrations per invoice row — the grouped subquery the report has
+#   always had, kept so its cost does not grow with the page.
+# - `link_states` repeats, per registration, the decision `core.delivery.link_state` makes for
+#   one assignment. Both must agree, so its precedence is the same, including `per_returned`.
+# - `link_counts` folds those states back into five counts per row.
+#
+# The final projection then reports the row, the delivery it is measured against, and the state.
+# A cancelled invoice is still a row: its units were delivered, and the serials registered for
+# them still exist.
 _MISSING_SQL = """
+WITH shipments AS (
+	SELECT
+		links.sales_invoice_item AS sales_invoice_item,
+		links.delivery_note AS delivery_note,
+		SUM(CASE WHEN links.is_forward = 1 AND links.note_docstatus = 1 THEN links.units ELSE 0 END) AS shipped_units,
+		SUM(CASE WHEN links.is_forward = 0 AND links.note_docstatus = 1 THEN links.units ELSE 0 END) AS returned_units,
+		SUM(CASE WHEN links.is_forward = 1 THEN 1 ELSE 0 END) AS forward_rows,
+		SUM(CASE WHEN links.is_forward = 1 AND links.note_docstatus = 2 THEN 1 ELSE 0 END) AS cancelled_forwards,
+		SUM(CASE WHEN links.is_forward = 1 AND links.note_docstatus = 1 THEN 1 ELSE 0 END) AS submitted_forwards,
+		MAX(CASE WHEN links.is_forward = 1 THEN links.per_returned END) AS per_returned
+	FROM (
+		SELECT
+			fwd.si_detail AS sales_invoice_item,
+			dn.name AS delivery_note,
+			1 AS is_forward,
+			dn.docstatus AS note_docstatus,
+			dn.per_returned AS per_returned,
+			CEIL(GREATEST(ABS(fwd.qty) - 0.000000001, 0)) AS units
+		FROM `tabDelivery Note Item` fwd
+		INNER JOIN `tabDelivery Note` dn ON dn.name = fwd.parent
+		WHERE fwd.parenttype = 'Delivery Note'
+			AND COALESCE(dn.is_return, 0) = 0
+			AND COALESCE(fwd.si_detail, '') <> ''
+			AND COALESCE(fwd.qty, 0) <> 0
+		UNION ALL
+		SELECT
+			fwd.si_detail AS sales_invoice_item,
+			fwd.parent AS delivery_note,
+			0 AS is_forward,
+			ret_note.docstatus AS note_docstatus,
+			0 AS per_returned,
+			CEIL(GREATEST(ABS(ret.qty) - 0.000000001, 0)) AS units
+		FROM `tabDelivery Note Item` ret
+		INNER JOIN `tabDelivery Note` ret_note ON ret_note.name = ret.parent
+		INNER JOIN `tabDelivery Note Item` fwd
+			ON fwd.name = ret.dn_detail AND fwd.parenttype = 'Delivery Note'
+		WHERE ret.parenttype = 'Delivery Note'
+			AND COALESCE(ret_note.is_return, 0) = 1
+			AND COALESCE(fwd.si_detail, '') <> ''
+			AND COALESCE(ret.qty, 0) <> 0
+	) links
+	GROUP BY links.sales_invoice_item, links.delivery_note
+),
+row_supply AS (
+	SELECT
+		sales_invoice_item AS sales_invoice_item,
+		SUM(shipped_units - returned_units) AS delivered_units
+	FROM shipments
+	GROUP BY sales_invoice_item
+),
+assignments AS (
+	SELECT sales_invoice, sales_invoice_item, COUNT(*) AS registered
+	FROM `tabLogistics Serial Assignment`
+	GROUP BY sales_invoice, sales_invoice_item
+),
+link_states AS (
+	SELECT
+		lsa.sales_invoice AS sales_invoice,
+		lsa.sales_invoice_item AS sales_invoice_item,
+		CASE
+			WHEN COALESCE(lsa.delivery_note, '') = '' THEN '{unlinked}'
+			WHEN s.delivery_note IS NULL THEN '{unknown}'
+			WHEN s.cancelled_forwards = s.forward_rows THEN '{cancelled}'
+			WHEN s.submitted_forwards = 0 THEN '{draft}'
+			WHEN COALESCE(s.per_returned, 0) >= {returned_percent}
+				OR s.shipped_units - s.returned_units <= 0 THEN '{returned}'
+			ELSE '{delivered}'
+		END AS state
+	FROM `tabLogistics Serial Assignment` lsa
+	LEFT JOIN shipments s
+		ON s.sales_invoice_item = lsa.sales_invoice_item
+		AND s.delivery_note = lsa.delivery_note
+),
+link_counts AS (
+	SELECT
+		sales_invoice,
+		sales_invoice_item,
+		SUM(CASE WHEN state = '{delivered}' THEN 1 ELSE 0 END) AS confirmed,
+		SUM(CASE WHEN state = '{unlinked}' THEN 1 ELSE 0 END) AS unlinked,
+		SUM(CASE WHEN state IN ('{cancelled}', '{returned}') THEN 1 ELSE 0 END) AS cancelled_or_returned,
+		SUM(CASE WHEN state = '{draft}' THEN 1 ELSE 0 END) AS draft,
+		SUM(CASE WHEN state = '{unknown}' THEN 1 ELSE 0 END) AS unknown
+	FROM link_states
+	GROUP BY sales_invoice, sales_invoice_item
+)
 SELECT
 	si.name AS sales_invoice,
 	si.posting_date AS sales_date,
@@ -478,18 +641,34 @@ SELECT
 	sii.idx AS row_index,
 	sii.qty AS invoiced_qty,
 	{requirement} AS required_units,
+	{net_delivered} AS delivered_units,
 	COALESCE(a.registered, 0) AS registered,
+	{shortfall} AS missing_units,
+	COALESCE(c.confirmed, 0) AS confirmed,
+	COALESCE(c.unlinked, 0) AS unlinked,
+	COALESCE(c.cancelled_or_returned, 0) AS cancelled_or_returned,
+	COALESCE(c.draft, 0) AS draft,
+	COALESCE(c.unknown, 0) AS unknown,
+	CASE
+		WHEN COALESCE(a.registered, 0) = 0 THEN '{no_serials}'
+		WHEN COALESCE(c.cancelled_or_returned, 0) > 0
+			AND COALESCE(c.cancelled_or_returned, 0) >= COALESCE(a.registered, 0)
+			THEN '{cancelled_state}'
+		WHEN {shortfall} > 0 THEN '{partial_state}'
+		WHEN COALESCE(c.confirmed, 0) < {net_delivered}
+			OR COALESCE(c.confirmed, 0) < COALESCE(a.registered, 0)
+			THEN '{unconfirmed_state}'
+		ELSE '{complete_state}'
+	END AS serial_state,
 	si.status AS invoice_status,
 	si.docstatus AS docstatus,
 	si.company AS company
 FROM `tabSales Invoice Item` sii
 INNER JOIN `tabSales Invoice` si ON si.name = sii.parent
 INNER JOIN `tabItem` i ON i.name = sii.item_code
-LEFT JOIN (
-	SELECT sales_invoice, sales_invoice_item, COUNT(*) AS registered
-	FROM `tabLogistics Serial Assignment`
-	GROUP BY sales_invoice, sales_invoice_item
-) a ON a.sales_invoice = sii.parent AND a.sales_invoice_item = sii.name
+LEFT JOIN assignments a ON a.sales_invoice = sii.parent AND a.sales_invoice_item = sii.name
+LEFT JOIN row_supply u ON u.sales_invoice_item = sii.name
+LEFT JOIN link_counts c ON c.sales_invoice = sii.parent AND c.sales_invoice_item = sii.name
 WHERE {where}
 ORDER BY si.posting_date DESC, si.name ASC, sii.idx ASC
 LIMIT %(limit)s OFFSET %(offset)s

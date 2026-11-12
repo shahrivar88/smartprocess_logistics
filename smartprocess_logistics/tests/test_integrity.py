@@ -569,6 +569,7 @@ class TestHooksAreRegisteredAndSafe(UnitTestCase):
 				"Purchase Receipt",
 				"Stock Entry",
 				"Stock Reservation Entry",
+				"Logistics Serial Assignment",
 			},
 		)
 		self.assertEqual(
@@ -617,9 +618,30 @@ class TestHooksAreRegisteredAndSafe(UnitTestCase):
 					doc_events[doctype]["before_submit"],
 					"smartprocess_logistics.measurements.snapshot_purchase_document",
 				)
+		self.assertEqual(
+			doc_events["Logistics Serial Assignment"],
+			{
+				"validate": "smartprocess_logistics.serial_link.validate_assignment",
+				"on_trash": "smartprocess_logistics.serial_link.audit_deletion",
+			},
+		)
 
 	def test_the_handler_never_ignores_permissions_or_writes_sql(self):
 		source = (APP_ROOT / "integrity.py").read_text(encoding="utf-8")
+
+		self.assertNotIn("ignore_permissions=", source)
+		self.assertNotIn("ignore_permissions =", source)
+		self.assertNotIn("frappe.db.sql", source)
+		self.assertNotIn("frappe.db.set_value", source)
+
+	def test_the_assignment_guard_never_ignores_permissions_or_writes_sql(self):
+		"""The guard that runs for the Desk and the REST API as well as the app's own endpoints.
+
+		`Document.add_comment` sets `ignore_permissions` inside the framework, so the audit entry
+		needs no privilege of its own; the app's side must not claim one, and must not reach the
+		table except through the ORM.
+		"""
+		source = (APP_ROOT / "serial_link.py").read_text(encoding="utf-8")
 
 		self.assertNotIn("ignore_permissions=", source)
 		self.assertNotIn("ignore_permissions =", source)

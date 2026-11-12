@@ -50,7 +50,14 @@ FORMAT = "smartprocess-logistics-serials"
 # its amendment. They are carried so that an uninstall does not lose them; they are never
 # re-created by an import, and `plan` says so. A version 1 file has no such section and is read
 # exactly as it always was.
-FORMAT_VERSION = 2
+#
+# 3 adds the delivery link to an assignment — `delivery_note` and `delivery_note_item`. The reader
+# below tolerates either field being absent, so this is not raised to make a new file readable; it
+# is raised because the tolerance would otherwise run the wrong way. A version 2 app reading a
+# version 3 file would place the registrations and export them back without the two columns it
+# does not know, so a restore through an older app would quietly unlink every serial from the
+# shipment it left with. Refusing the file is how the version gate keeps that from happening.
+FORMAT_VERSION = 3
 
 SERIAL_DOCTYPE = "Logistics Serial"
 ASSIGNMENT_DOCTYPE = "Logistics Serial Assignment"
@@ -84,6 +91,8 @@ ASSIGNMENT_FIELDS = (
 	"company",
 	"sales_invoice_item",
 	"invoice_item_idx",
+	"delivery_note",
+	"delivery_note_item",
 	"remarks",
 	"creation",
 	"modified",
@@ -199,6 +208,16 @@ REASON_INVOICE_MISSING = "INVOICE_MISSING"
 REASON_INVOICE_CANCELLED = "INVOICE_CANCELLED"
 REASON_INVOICE_ROW_MISSING = "INVOICE_ROW_MISSING"
 REASON_COMPANY_MISMATCH = "COMPANY_MISMATCH"
+REASON_DELIVERY_UNRESOLVED = "DELIVERY_UNRESOLVED"
+REASON_DELIVERY_CANCELLED = "DELIVERY_CANCELLED"
+REASON_DELIVERY_INCOMPLETE = "DELIVERY_INCOMPLETE"
+# The three delivery reasons above mirror the three refusals `serial_link._derive_delivery` makes
+# on the write path. They are checked here as well because the insert loop aborts the whole file
+# on the first refusal, and an operator reading a preview should learn which row is wrong before
+# anything is written. A cross-delivery conflict is *not* checked here: answering it needs the
+# site's other registrations for the same serial, which the world below does not read. The guard
+# still refuses it on the write, so the file stops with an actionable message rather than being
+# placed with the invariant broken.
 REASON_SERIAL_UNRESOLVED = "SERIAL_UNRESOLVED"
 REASON_LINK_CONFLICT = "LINK_CONFLICT"
 REASON_EXCESS_QUANTITY = "EXCESS_QUANTITY"
@@ -237,6 +256,9 @@ REASON_MESSAGES = {
 	),
 	REASON_INVOICE_ROW_MISSING: "ردیف فاکتور در این فاکتور وجود ندارد",
 	REASON_COMPANY_MISMATCH: "شرکت ردیف با شرکت فاکتور نمی‌خواند",
+	REASON_DELIVERY_UNRESOLVED: "رسید تحویل این ردیف در این سایت وجود ندارد",
+	REASON_DELIVERY_CANCELLED: "رسید تحویل نام‌برده لغو شده است و سریال روی آن ثبت نمی‌شود",
+	REASON_DELIVERY_INCOMPLETE: "رسید تحویل نام‌برده ردیفی برای این ردیف فاکتور ندارد",
 	REASON_SERIAL_UNRESOLVED: "سریال این ردیف نه در فایل هست و نه در سایت",
 	REASON_LINK_CONFLICT: "این سریال از قبل روی همین فاکتور با سریال دیگری ثبت شده است",
 	REASON_EXCESS_QUANTITY: "ردیف فاکتور به تعداد خودش سریال دارد و سریال بیشتری نمی‌پذیرد",
@@ -718,7 +740,8 @@ def transfer_item_rows(document):
 
 
 def world_names(document):
-	"""The item, company and invoice names a document mentions, for the caller to resolve.
+	"""The item, company, invoice and delivery names a document mentions, for the caller to
+	resolve.
 
 	The plan asks whether *these* exist on the site. A world assembled only from what is already
 	stored answers that question about the wrong set: measured in the isolated lab, a five-row
@@ -756,6 +779,12 @@ def world_names(document):
 				| {row.get("source_invoice") for row in records if row.get("source_invoice")}
 				| {row.get("target_invoice") for row in records if row.get("target_invoice")}
 			)
+		),
+		# The delivery notes an assignment names, for the caller to look up — and to answer with the
+		# row of each that carries the invoice row, which is the value that is actually stored. A
+		# provisional registration names no delivery and contributes nothing here.
+		"delivery_names": tuple(
+			sorted({row.get("delivery_note") for row in assignments if row.get("delivery_note")})
 		),
 		# The serial masters the document names, for the caller to look up by name. A serial
 		# master's name is unique over the site and cannot be scoped to a company, so this is the
@@ -807,6 +836,17 @@ class World:
 	cancelled_invoices: frozenset = frozenset()
 	# (invoice, row name) for every item row of those invoices.
 	invoice_rows: frozenset = frozenset()
+	# The delivery notes the caller may see, and the subset that is cancelled. A registration may
+	# name a draft or a submitted note — both are deliveries an operator can have registered
+	# against — but not a cancelled one, which is what `serial_link` refuses.
+	deliveries: frozenset = frozenset()
+	cancelled_deliveries: frozenset = frozenset()
+	# (delivery note, invoice row name) -> the delivery row that carries the invoice row, first
+	# row wins. This is the answer `serial_link._delivery_row` derives on the write path, computed
+	# over the same ordering (`parent asc, idx asc, name asc`), so the file the plan produces and
+	# the row the write stores are the same value. A note that does not carry the invoice row has
+	# no entry, and the row is then refused rather than linked to a shipment of something else.
+	delivery_rows: dict = field(default_factory=dict)
 	# The names of the transfer records and their rows that already exist here. The naming series
 	# is per site, so a name is not an identity across sites — which is why this is asked at all.
 	transfers: frozenset = frozenset()
@@ -935,6 +975,17 @@ def plan(document, world, *, mode=MODE_LIVE, stamp=None):
 		# validation would refuse the insert and roll the whole import back over one rename.
 		if resolved:
 			row = {**row, "logistics_serial": resolved}
+
+		# The delivery row is re-pointed the same way and for the same reason: it is a value the
+		# write derives from the note, so the plan states what the write will store rather than
+		# echoing a name from another site's naming series. A note with no answer was refused above.
+		if row.get("delivery_note"):
+			row = {
+				**row,
+				"delivery_note_item": world.delivery_rows[
+					(row.get("delivery_note"), row.get("sales_invoice_item"))
+				],
+			}
 
 		row_key = (row.get("sales_invoice"), row.get("sales_invoice_item"))
 		placed[row_key] = placed.get(row_key, 0) + 1
@@ -1101,6 +1152,21 @@ def _assignment_conflict(row, world, resolved, arriving, placed, mode):
 
 	if row_key not in world.invoice_rows:
 		return Conflict(row.get("name"), REASON_INVOICE_ROW_MISSING, str(row.get("sales_invoice_item")))
+
+	# The delivery, answered against the same three facts `serial_link._derive_delivery` refuses on.
+	# A row with no delivery named is a provisional registration and passes: it is placed exactly
+	# as the file states it, unlinked, and no delivery is ever inferred for it.
+	delivery_note = row.get("delivery_note")
+
+	if delivery_note:
+		if delivery_note not in world.deliveries:
+			return Conflict(row.get("name"), REASON_DELIVERY_UNRESOLVED, str(delivery_note))
+
+		if delivery_note in world.cancelled_deliveries:
+			return Conflict(row.get("name"), REASON_DELIVERY_CANCELLED, str(delivery_note))
+
+		if (delivery_note, row.get("sales_invoice_item")) not in world.delivery_rows:
+			return Conflict(row.get("name"), REASON_DELIVERY_INCOMPLETE, str(delivery_note))
 
 	if resolved is None and identity not in arriving:
 		return Conflict(row.get("name"), REASON_SERIAL_UNRESOLVED, f"{identity[0]} / {identity[1]}")

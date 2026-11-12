@@ -338,7 +338,13 @@ class WorldNamesTest(UnitTestCase):
 	def test_an_empty_document_names_nothing(self):
 		self.assertEqual(
 			export.world_names(export.build([], [])),
-			{"item_codes": (), "company_names": (), "invoice_names": (), "serial_names": ()},
+			{
+				"item_codes": (),
+				"company_names": (),
+				"invoice_names": (),
+				"delivery_names": (),
+				"serial_names": (),
+			},
 		)
 
 	def test_the_endpoints_ask_about_the_documents_names(self):
@@ -1121,9 +1127,10 @@ class TransferRecordsInTheFileTest(UnitTestCase):
 		self.assertEqual(len(export.transfer_rows(built)), 1)
 		self.assertEqual(len(export.transfer_item_rows(built)), 2)
 
-	def test_the_document_is_version_2(self):
-		self.assertEqual(self.built()["format_version"], 2)
-		self.assertEqual(export.FORMAT_VERSION, 2)
+	def test_the_document_is_version_3(self):
+		"""Raised by the delivery link, because a version 2 app would export the link away."""
+		self.assertEqual(self.built()["format_version"], 3)
+		self.assertEqual(export.FORMAT_VERSION, 3)
 
 	def test_it_reads_back_as_what_was_written(self):
 		read = export.read(self.built())
@@ -1167,7 +1174,7 @@ class TransferRecordsInTheFileTest(UnitTestCase):
 
 	def test_a_newer_version_is_refused(self):
 		ahead = document()
-		ahead["format_version"] = 3
+		ahead["format_version"] = export.FORMAT_VERSION + 1
 		ahead["digest"] = export.document_digest(ahead)
 
 		with self.assertRaises(export.ExportError) as caught:

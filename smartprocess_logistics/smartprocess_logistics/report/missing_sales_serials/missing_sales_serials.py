@@ -1,10 +1,9 @@
 """The Missing Sales Serials report.
 
-The statement is built by `core.reports`, where the requirement rule, the company isolation and
-the permission conditions live, and the shortage is read from `core.quantities`, where the
-quantity rule lives. This module is the three things a report has to supply and nothing else:
-the filters, the acting principal, and the invoice permission conditions the framework would
-apply to a list of the same rows.
+The statement is built by `core.reports`, where the requirement rule, the company isolation,
+the delivery attribution and the permission conditions live. This module is the three things a
+report has to supply and nothing else: the filters, the acting principal, and the invoice
+permission conditions the framework would apply to a list of the same rows.
 
 No installation timestamp is read here, and none is passed on. The report covers every invoice
 the site holds; an invoice older than the app is audited like any other, because what decides a
@@ -19,14 +18,15 @@ module's own invention. `core.reports.check_permission_conditions` refuses `None
 forgot to ask — and accepts `""` — a framework that answered "no extra conditions".
 
 **Nothing is filtered in Python.** The page the database returns is the page the reader sees, so
-the shortage on a row is the shortage the database counted.
+the shortage on a row is the shortage the database counted. It is counted against the units the
+row actually delivered — net of submitted returns — because a unit still in the warehouse needs
+no label. `serial_state` names the case in one word, and the five link counts say why.
 """
 
 import frappe
 from frappe import _
 
 from smartprocess_logistics.api.gateway import FrappeGateway
-from smartprocess_logistics.core.quantities import row_coverage
 from smartprocess_logistics.core.reports import (
 	MISSING_COLUMNS,
 	MissingFilters,
@@ -34,7 +34,7 @@ from smartprocess_logistics.core.reports import (
 	build_missing_query,
 )
 
-# The column labels, in the order `core.reports` selects them, plus the shortage this module adds.
+# The column labels, in the order `core.reports` selects them.
 LABELS = {
 	"sales_invoice": _("فاکتور فروش"),
 	"sales_date": _("تاریخ سند"),
@@ -46,8 +46,16 @@ LABELS = {
 	"sales_invoice_item": _("ردیف فاکتور"),
 	"row_index": _("شمارهٔ ردیف"),
 	"invoiced_qty": _("تعداد فاکتور"),
-	"required_units": _("نیاز"),
+	"required_units": _("نیاز فاکتور"),
+	"delivered_units": _("تحویل‌شده"),
 	"registered": _("ثبت‌شده"),
+	"missing_units": _("کسری تحویل"),
+	"confirmed": _("تأییدشده با تحویل"),
+	"unlinked": _("موقت، بدون تحویل"),
+	"cancelled_or_returned": _("لغو یا برگشتی"),
+	"draft": _("رسید پیش‌نویس"),
+	"unknown": _("نامشخص"),
+	"serial_state": _("وضعیت سریال"),
 	"invoice_status": _("وضعیت"),
 	"docstatus": _("وضعیت سند"),
 	"company": _("شرکت"),
@@ -62,7 +70,14 @@ FIELD_TYPES = {
 	"row_index": ("Int", None),
 	"invoiced_qty": ("Float", None),
 	"required_units": ("Int", None),
+	"delivered_units": ("Int", None),
 	"registered": ("Int", None),
+	"missing_units": ("Int", None),
+	"confirmed": ("Int", None),
+	"unlinked": ("Int", None),
+	"cancelled_or_returned": ("Int", None),
+	"draft": ("Int", None),
+	"unknown": ("Int", None),
 	"docstatus": ("Int", None),
 	"company": ("Link", "Company"),
 }
@@ -84,7 +99,7 @@ def execute(filters=None):
 
 	rows = frappe.db.sql(query.sql, query.params, as_dict=True)
 
-	return _columns(), _with_shortage(rows)
+	return _columns(), rows
 
 
 def _missing_filters(filters):
@@ -146,20 +161,4 @@ def _columns():
 
 		columns.append(column)
 
-	columns.append({"fieldname": "shortage", "label": _("کسری"), "fieldtype": "Int"})
-
 	return columns
-
-
-def _with_shortage(rows):
-	"""Add the shortage, through the same function the rest of the app counts with."""
-	for row in rows:
-		coverage = row_coverage(
-			row.get("sales_invoice_item") or row.get("sales_invoice"),
-			row.get("item_code") or "",
-			row.get("invoiced_qty") or 0,
-			int(row.get("registered") or 0),
-		)
-		row["shortage"] = coverage.shortage
-
-	return rows

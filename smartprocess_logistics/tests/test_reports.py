@@ -28,6 +28,12 @@ from smartprocess_logistics.core.reports import (
 	MISSING_COLUMNS,
 	REGISTER_COLUMNS,
 	REQUIRED_UNITS_SQL,
+	SERIAL_STATE_CANCELLED_OR_RETURNED,
+	SERIAL_STATE_COMPLETE,
+	SERIAL_STATE_NO_SERIALS,
+	SERIAL_STATE_PARTIAL,
+	SERIAL_STATE_UNCONFIRMED,
+	SERIAL_STATES,
 	MissingFilters,
 	Query,
 	RegisterFilters,
@@ -72,12 +78,6 @@ def register(
 		principal,
 		permission_conditions=permission_conditions,
 	)
-
-
-def where_of(query):
-	"""The conditions of a statement, without its select list or its ordering."""
-
-	return query.sql.split("WHERE", 1)[1].split("ORDER BY")[0]
 
 
 def missing(
@@ -143,7 +143,7 @@ class TestParameterization(UnitTestCase):
 
 		self.assertNotIn("installed_on", query.sql)
 		self.assertNotIn("installed_on", query.params)
-		self.assertNotIn("si.creation", where_of(query))
+		self.assertNotRegex(query.sql, r"si\.creation\s*(<>|<=|>=|=|<|>)")
 
 	def test_the_company_list_becomes_one_placeholder_per_company(self):
 		query = register(principal=TWO_COMPANIES)
@@ -176,8 +176,11 @@ class TestParameterization(UnitTestCase):
 		self.assertEqual(register().select_count(), 1)
 
 	def test_the_missing_report_uses_one_subquery_and_not_a_query_per_row(self):
-		# Two SELECTs: the report and the grouped count. More would mean an N+1.
-		self.assertEqual(missing().select_count(), 2)
+		# Eight SELECTs: the report, the delivery walk and its two branches, the per-row supply,
+		# the registration count, the per-assignment link state and the per-row link counts.
+		# The number is fixed by the statement — every one is a grouped CTE joined once — so it
+		# cannot grow with the page. A statement assembled per row would make it depend on rows.
+		self.assertEqual(missing().select_count(), 8)
 		self.assertIn("GROUP BY", missing().sql)
 
 
@@ -301,7 +304,7 @@ class TestNoInstallationBoundary(UnitTestCase):
 		query = missing()
 
 		self.assertIn("si.creation AS invoice_created", query.sql)
-		self.assertNotIn("si.creation", where_of(query))
+		self.assertNotRegex(query.sql, r"si\.creation\s*(<>|<=|>=|=|<|>)")
 
 	def test_no_settings_row_is_read_for_it(self):
 		"""A missing or edited install marker cannot empty the report any more."""
@@ -407,11 +410,22 @@ class TestRequirementFormula(UnitTestCase):
 	def test_the_formula_is_in_the_select_list(self):
 		self.assertIn("AS required_units", missing().sql)
 
-	def test_an_incomplete_filter_uses_the_formula(self):
-		self.assertIn("COALESCE(a.registered, 0) < CEIL(", missing().sql)
+	def test_an_incomplete_filter_is_measured_against_the_delivered_units(self):
+		"""A row is short when it has fewer serials than delivered units — not fewer than invoiced.
+
+		The requirement is still selected as `required_units`, because that column is what the
+		invoice says. What filters a row is what left the warehouse; a unit still in stock needs
+		no label, and calling it short would fill the report with work that cannot be done.
+		"""
+		self.assertIn(
+			"COALESCE(a.registered, 0) < GREATEST(COALESCE(u.delivered_units, 0), 0)",
+			missing().sql,
+		)
 
 	def test_the_complete_rows_can_be_asked_for(self):
-		self.assertNotIn("COALESCE(a.registered, 0) < CEIL(", missing(filters={"only_incomplete": False}).sql)
+		query = missing(filters={"only_incomplete": False}).sql
+
+		self.assertNotIn("COALESCE(a.registered, 0) < GREATEST(", query)
 
 
 class TestGrainAndColumns(UnitTestCase):
@@ -498,7 +512,8 @@ class TestTheRegistrationSideOfTheReport(UnitTestCase):
 	def test_registrations_are_left_joined_so_a_row_with_none_is_still_a_row(self):
 		query = missing()
 
-		self.assertIn("LEFT JOIN (", query.sql)
+		self.assertIn("LEFT JOIN assignments a", query.sql)
+		self.assertIn("assignments AS (", query.sql)
 		self.assertIn("GROUP BY sales_invoice, sales_invoice_item", query.sql)
 
 	def test_no_inner_join_reaches_the_registration_table(self):
@@ -534,6 +549,97 @@ class TestTheRegistrationSideOfTheReport(UnitTestCase):
 	def test_the_requirement_is_counted_by_magnitude(self):
 		"""A credit note carries a negative quantity and still needs a label per unit."""
 		self.assertIn("ABS(sii.qty)", missing().sql)
+
+
+class TestDeliveryAwareness(UnitTestCase):
+	"""What the missing report knows about deliveries, and how it measures a shortage.
+
+	The statement is not executed here. What is established is the attribution it asks for: units
+	come from the invoice row's delivery notes in both directions, a return is subtracted from the
+	note it reverses rather than added anywhere, and each registration's state follows the same
+	precedence `core.delivery.link_state` applies in the dialog. `core/delivery.py`'s own tests
+	check that precedence; this one checks that the statement asks for it in the same order.
+	"""
+
+	def test_the_forward_rows_are_found_through_the_invoice_row(self):
+		sql = missing().sql
+
+		self.assertIn("fwd.si_detail AS sales_invoice_item", sql)
+		self.assertIn("COALESCE(fwd.si_detail, '') <> ''", sql)
+
+	def test_a_return_note_is_not_read_as_a_shipment(self):
+		"""The note-side branch requires a forward note, or a return would be subtracted twice."""
+		self.assertIn("COALESCE(dn.is_return, 0) = 0", missing().sql)
+
+	def test_a_return_is_attributed_to_the_note_it_reverses(self):
+		"""ERPNext copies no `si_detail` onto a return row; it carries `dn_detail` instead."""
+		sql = missing().sql
+
+		self.assertIn("fwd.name = ret.dn_detail", sql)
+		self.assertIn("fwd.parent AS delivery_note", sql)
+
+	def test_only_submitted_rows_count_towards_delivery(self):
+		"""A draft or cancelled delivery moved no stock, so it delivered no unit."""
+		sql = missing().sql
+
+		self.assertIn("links.note_docstatus = 1", sql)
+		self.assertIn("links.note_docstatus = 2", sql)
+
+	def test_the_delivered_figure_is_net_of_returns(self):
+		self.assertIn("SUM(shipped_units - returned_units) AS delivered_units", missing().sql)
+
+	def test_the_shortage_is_measured_against_delivered_units(self):
+		self.assertIn("AS missing_units", missing().sql)
+
+	def test_the_link_state_precedence_is_the_dialog_precedence(self):
+		"""Unlinked, unknown, cancelled, draft, returned, delivered — the same order as `link_state`."""
+		sql = missing().sql
+		positions = [
+			sql.index("THEN 'UNLINKED'"),
+			sql.index("THEN 'UNKNOWN'"),
+			sql.index("THEN 'CANCELLED'"),
+			sql.index("THEN 'DRAFT'"),
+			sql.index("THEN 'RETURNED'"),
+			sql.index("ELSE 'DELIVERED'"),
+		]
+
+		self.assertEqual(positions, sorted(positions))
+
+	def test_a_fully_returned_note_is_read_from_its_own_percentage(self):
+		"""A forward note's returns sit on other notes; only `per_returned` sees them."""
+		self.assertIn("COALESCE(s.per_returned, 0) >= 100", missing().sql)
+
+	def test_every_serial_state_is_in_the_statement(self):
+		sql = missing().sql
+
+		for state in SERIAL_STATES:
+			with self.subTest(state=state):
+				self.assertIn(f"'{state}'", sql)
+
+	def test_the_states_are_the_five_the_report_promises(self):
+		self.assertEqual(
+			set(SERIAL_STATES),
+			{
+				SERIAL_STATE_NO_SERIALS,
+				SERIAL_STATE_CANCELLED_OR_RETURNED,
+				SERIAL_STATE_PARTIAL,
+				SERIAL_STATE_UNCONFIRMED,
+				SERIAL_STATE_COMPLETE,
+			},
+		)
+
+	def test_the_no_serials_state_wins_over_a_shortage(self):
+		"""A row with no registrations is `NO_SERIALS` whatever was delivered."""
+		sql = missing().sql
+
+		self.assertLess(sql.index("THEN 'NO_SERIALS'"), sql.index("THEN 'PARTIAL'"))
+
+	def test_a_cancelled_or_returned_row_keeps_its_registrations_visible(self):
+		"""Cancellation is a state of the link, not a reason to hide the row."""
+		self.assertIn(
+			f"THEN '{SERIAL_STATE_CANCELLED_OR_RETURNED}'",
+			missing().sql,
+		)
 
 
 class TestQueryValue(UnitTestCase):

@@ -692,6 +692,60 @@ class TestTheSerialToolbar(UnitTestCase):
 			"the button is added inside the role check, not beside it",
 		)
 
+	def test_the_delivery_choice_is_read_from_the_list_and_not_from_its_box(self):
+		"""The box around the list carries the same class, and jQuery fires a delegated handler
+		once for every matching element on the bubble path.
+
+		With a bare `.sp-scan-delivery`, the handler ran twice: once for the `<select>` with the
+		operator's note, and once for the `<div>` around it, where `$(this).val()` is empty. The
+		second run took the empty value as a refusal and deleted the note the first run had just
+		stored, so the row stayed ambiguous and its save was blocked — the defect the browser
+		harness caught. Qualifying the selector with `select.` is what keeps it to one run.
+		"""
+		source = self.source()
+
+		self.assertIn('<div class="sp-scan-delivery${delivery_state_class(facts.state)}">', source)
+		self.assertIn('on("change", "select.sp-scan-delivery"', source)
+		self.assertNotIn('on("change", ".sp-scan-delivery"', source)
+
+
+class TestTheCountersFollowTheSave(UnitTestCase):
+	"""A save's answer already carries the invoice's new totals; the chips must show them at once.
+
+	`add_row_serials` returns `summary` beside the row, and the station stored it — but only
+	`load_status` redrew the chips, so after «ذخیره سریال‌ها» the counters kept the numbers of
+	the previous save until the operator pressed «به‌روزرسانی» or reopened the window. The rule
+	pinned here is the one the fix put in place: the counters are drawn in one place,
+	`render_summary`, and both the refresh and the save call it.
+	"""
+
+	def source(self):
+		return (APP / "public" / "js" / "sales_invoice_serial_button.js").read_text(encoding="utf-8")
+
+	def test_the_counters_are_drawn_in_one_place(self):
+		source = self.source()
+
+		self.assertEqual(source.count("const render_summary = function"), 1)
+		self.assertEqual(
+			source.count('.sp-logistics-summary").replaceWith('),
+			1,
+			"the summary is replaced in the helper only; a second call site drifts",
+		)
+
+	def test_the_save_redraws_the_counters_before_it_redraws_the_row(self):
+		source = self.source()
+		marker = "state.status.summary = answer.summary || state.status.summary;"
+
+		self.assertEqual(source.count(marker), 1)
+
+		after = source.split(marker, 1)[1]
+
+		self.assertLess(
+			after.index("render_summary();"),
+			after.index("drop_pending_many("),
+			"the save draws the new totals in its own success path",
+		)
+
 
 class TestEverythingOnScreenIsPersian(UnitTestCase):
 	"""The operator this app is for reads Persian. Every label, title and message ships in it.

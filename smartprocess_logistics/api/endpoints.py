@@ -37,6 +37,7 @@ from smartprocess_logistics import __version__
 from smartprocess_logistics.api.gateway import FrappeGateway
 from smartprocess_logistics.core import (
 	authz,
+	delivery,
 	delimiters,
 	eligibility,
 	export,
@@ -187,6 +188,68 @@ def _read_page(limit, offset, limits):
 	return limit, offset
 
 
+def _delivery_view(candidates, registrations):
+	"""One row's shipment facts, as the station draws them.
+
+	`state` is the decision the row's live delivery rows support: one obvious delivery, none at
+	all, or several the station has to ask about. It comes from the same `core.delivery` function
+	the write path uses, so the window's question and the server's answer cannot disagree.
+
+	`missing` is measured against what actually left, not against the invoiced quantity: a row of
+	ten delivered in two shipments of five is five labels short after the first, not ten.
+	`confirmed` counts the registrations a completed delivery holds, and `provisional` those that
+	named no delivery at all. A label on a draft or a cancelled shipment is neither — each
+	registration carries its own `delivery_state`, so the window can say which of the two it is.
+	"""
+	delivered = delivery.delivered_units(candidates)
+	choice = delivery.select_delivery(candidates)
+
+	# One link state per delivery note, because `link_state` answers about the note — a forward row
+	# and its return are the same shipment, not two.
+	notes = {}
+	options = []
+
+	for candidate in candidates:
+		note = candidate.delivery_note
+
+		if note not in notes:
+			notes[note] = delivery.link_state(candidates, note)
+
+		options.append(
+			{
+				"delivery_note": note,
+				"delivery_note_item": candidate.delivery_note_item,
+				"delivery_date": candidate.delivery_date,
+				"warehouse": candidate.warehouse,
+				"qty": candidate.qty,
+				"units": candidate.units,
+				"is_return": candidate.is_return,
+				"docstatus": candidate.docstatus,
+				"link_state": notes[note],
+			}
+		)
+
+	return {
+		"state": choice.status,
+		# The code the write path would refuse with, when the row cannot be written without an
+		# answer: `None` for a row that is linked or provisional without being asked anything.
+		"code": choice.code,
+		# The delivery the row is linked to with no explicit choice, or `None` when the row is
+		# provisional or the answer is ambiguous. The station sends it back only after an operator
+		# picked one from a list of more than one.
+		"note": choice.delivery_note,
+		"delivered": delivered,
+		"missing": delivery.missing_units(delivered, len(registrations)),
+		"confirmed": sum(
+			1 for entry in registrations if entry.get("delivery_state") == delivery.LINK_DELIVERED
+		),
+		"provisional": sum(
+			1 for entry in registrations if entry.get("delivery_state") == delivery.LINK_UNLINKED
+		),
+		"candidates": options,
+	}
+
+
 def _status(gateway, invoice_name):
 	"""The rows of an invoice with their coverage, built from stored assignments.
 
@@ -200,6 +263,13 @@ def _status(gateway, invoice_name):
 	they were registered. The dialog puts them back in the row's box, which is what makes
 	correcting one serial an edit rather than a retype of the row's whole set. One read of the
 	assignments answers both the counts and that list, so the page is one query rather than two.
+
+	Each row carries its delivery facts as well, from `_delivery_view`: whether the shipment is
+	obvious, absent or ambiguous; how many units actually left; and what each stored link means
+	today. The rows are read here, in one call for the whole invoice, because the station is the
+	place the answer is needed and a second round trip for it would be a second place to keep in
+	step. Nothing is inferred: a row with more than one live delivery reports `CHOICE_REQUIRED`
+	and the list to choose from.
 	"""
 	rows = gateway.read_rows(invoice_name)
 	# Bounded, and refused rather than truncated when the bound is reached: every count in this
@@ -215,6 +285,11 @@ def _status(gateway, invoice_name):
 			),
 			title=_("سریال‌ها"),
 		)
+
+	# The shipment rows behind this invoice's rows, read once for the whole page. Same reason the
+	# rows are read here rather than asked of the caller: this is the invoice's own fulfilment, and
+	# a row whose deliveries were never looked up must not be drawn as a row with none.
+	candidates = gateway.delivery_candidates(invoice_name, [row.row_key for row in rows])
 
 	counts = {}
 	serials = {}
@@ -233,6 +308,14 @@ def _status(gateway, invoice_name):
 				"serial_no": assignment.get("serial_no"),
 				"normalized_serial": assignment.get("normalized_serial"),
 				"company": assignment.get("company"),
+				"delivery_note": assignment.get("delivery_note"),
+				"delivery_note_item": assignment.get("delivery_note_item"),
+				# What the stored link means **now**. A delivery cancelled or returned after the
+				# serial was registered leaves the registration exactly where it was — nothing here
+				# rewrites it — and this is how the window says so instead of showing it as delivered.
+				"delivery_state": delivery.link_state(
+					candidates.get(row_key, ()), assignment.get("delivery_note")
+				),
 			}
 		)
 
@@ -322,6 +405,8 @@ def _status(gateway, invoice_name):
 				"state": eligibility.row_state(required, capacity, registered),
 				"serials": serials.get(row.row_key, []),
 				"assignments": registrations,
+				# The shipment this row's labels belong to, and how much of it has actually left.
+				"delivery": _delivery_view(candidates.get(row.row_key, ()), registrations),
 			}
 		)
 
@@ -416,12 +501,18 @@ def get_serial_assignments(sales_invoice, limit=None, offset=None):
 
 @frappe.whitelist(methods=["POST"])
 @rate_limit(limit=60, seconds=60)
-def set_row_serials(sales_invoice, sales_invoice_item, serials):
+def set_row_serials(sales_invoice, sales_invoice_item, serials, delivery_note=None):
 	"""Set the serials of one invoice row: add, replace and remove in one transaction.
 
 	The row's whole set is replaced. Sending the serials it already has plus the new ones adds
 	to it; sending fewer replaces it; sending none removes them all. `serials` is a list, or the
 	text an operator typed, which the server splits with the configured delimiters.
+
+	`delivery_note` is the operator's answer to "which shipment did these leave with?". It is
+	needed only when the row has more than one live delivery: the row with one is linked to it
+	without being asked, a row with none is registered provisionally, and a row with several is
+	refused rather than guessed at. Naming a note the row does not belong to is refused the same
+	way — see `core.delivery.select_delivery`.
 	"""
 	gateway = FrappeGateway()
 
@@ -456,6 +547,10 @@ def set_row_serials(sales_invoice, sales_invoice_item, serials):
 			only_rows=(sales_invoice_item,),
 			delimiters=(),
 			policy=_policy(int(settings.serial_max_length or 60)),
+			# The operator's chosen delivery, if there was one to choose. `core.orchestration`
+			# resolves it against the row's live deliveries under the lock; an empty note is no
+			# selection at all, which is what a row with a single delivery needs.
+			selections=((sales_invoice_item, delivery_note),) if delivery_note else (),
 		)
 	except authz.AuthorizationError as error:
 		_fail(error)
@@ -494,7 +589,7 @@ def set_row_serials(sales_invoice, sales_invoice_item, serials):
 
 @frappe.whitelist(methods=["POST"])
 @rate_limit(limit=120, seconds=60)
-def add_row_serial(sales_invoice, sales_invoice_item, serial):
+def add_row_serial(sales_invoice, sales_invoice_item, serial, delivery_note=None):
 	"""Add one serial to one invoice row, leaving the rest of that row's registrations alone.
 
 	This is what a scan station calls, once per label, and the difference from `set_row_serials`
@@ -511,6 +606,11 @@ def add_row_serial(sales_invoice, sales_invoice_item, serial):
 	A refusal says which refusal it was: a duplicate on the invoice, a row over its quantity, a
 	serial longer than the site allows. The scanned text is the caller's to keep — the station
 	holds it on a refusal so it can be corrected rather than retyped.
+
+	`delivery_note` names the shipment this label left with, and is required only when the row has
+	more than one live delivery. A row with one is linked to it here, and a row whose goods have
+	not shipped yet is registered provisionally — marked as such and excluded from the
+	confirmed-delivery status until it is reconciled.
 	"""
 	gateway = FrappeGateway()
 
@@ -542,6 +642,9 @@ def add_row_serial(sales_invoice, sales_invoice_item, serial):
 			serials=(serial,),
 			principal=principal,
 			policy=_policy(int(settings.serial_max_length or 60)),
+			# Resolved against the row's live deliveries under the lock, exactly as `set_row_serials`
+			# does it. An empty note is no selection, which is what a row with a single delivery needs.
+			delivery_note=delivery_note,
 		)
 	except authz.AuthorizationError as error:
 		_fail(error)
@@ -583,7 +686,7 @@ def add_row_serial(sales_invoice, sales_invoice_item, serial):
 
 @frappe.whitelist(methods=["POST"])
 @rate_limit(limit=120, seconds=60)
-def add_row_serials(sales_invoice, sales_invoice_item, serials):
+def add_row_serials(sales_invoice, sales_invoice_item, serials, delivery_note=None):
 	"""Add several serials to one invoice row, in one transaction, in the order given.
 
 	The same act as `add_row_serial`, for a batch: the station's Save sends one row's waiting
@@ -601,6 +704,11 @@ def add_row_serials(sales_invoice, sales_invoice_item, serials):
 
 	`serials` is taken as a list because that is what a caller has; it is bounded here, because a
 	request is a request and a list of ten thousand labels is not a save.
+
+	`delivery_note` names the shipment the labels left with, and is required only when the row has
+	more than one live delivery — the same rule as `add_row_serial`. The whole batch is linked to
+	one shipment or refused as a batch; half a batch on one delivery and half on another is two
+	saves, because that is two different answers to the same question.
 	"""
 	gateway = FrappeGateway()
 
@@ -634,6 +742,7 @@ def add_row_serials(sales_invoice, sales_invoice_item, serials):
 			serials=texts,
 			principal=principal,
 			policy=_policy(int(settings.serial_max_length or 60)),
+			delivery_note=delivery_note,
 		)
 	except authz.AuthorizationError as error:
 		_fail(error)

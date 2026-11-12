@@ -18,6 +18,7 @@ themselves comes back as an issue so a caller can show all of them at once.
 from dataclasses import dataclass, field
 
 from smartprocess_logistics.core import delimiters as delimiter_rules
+from smartprocess_logistics.core import delivery as delivery_rules
 from smartprocess_logistics.core import eligibility, normalization, quantities
 from smartprocess_logistics.core import markers as marker_rules
 
@@ -31,6 +32,8 @@ CODE_DUPLICATE_IN_INVOICE = "DUPLICATE_IN_INVOICE"
 CODE_ALREADY_REGISTERED = "ALREADY_REGISTERED"
 CODE_CONTAINS_DELIMITER = "CONTAINS_DELIMITER"
 CODE_EXCESS_QUANTITY = "EXCESS_QUANTITY"
+CODE_DELIVERY_CHOICE_REQUIRED = delivery_rules.CODE_DELIVERY_CHOICE_REQUIRED
+CODE_DELIVERY_NOT_A_CANDIDATE = delivery_rules.CODE_DELIVERY_NOT_A_CANDIDATE
 
 CODE_CONFIG_DELIMITER = "CONFIG_DELIMITER"
 CODE_CONFIG_DELIMITER_DUPLICATE = "CONFIG_DELIMITER_DUPLICATE"
@@ -100,11 +103,18 @@ class SerialIssue:
 
 @dataclass(frozen=True)
 class AcceptedSerial:
-	"""A serial that may be written."""
+	"""A serial that may be written, and the delivery it is written against.
+
+	Both delivery values are empty together: a serial registered before any delivery exists is
+	provisional, and the report keeps it apart from a confirmed delivery rather than inventing
+	one for it.
+	"""
 
 	row_key: str
 	item_code: str
 	serial: normalization.NormalizedSerial
+	delivery_note: str | None = None
+	delivery_note_item: str | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +186,48 @@ def _index_existing(existing):
 	return counts, serials, rows_by_serial
 
 
+DELIVERY_MESSAGES = {
+	delivery_rules.CODE_DELIVERY_CHOICE_REQUIRED: (
+		"این ردیف بیش از یک رسید تحویل معتبر دارد؛ ابتدا رسید تحویل را انتخاب کنید."
+	),
+	delivery_rules.CODE_DELIVERY_NOT_A_CANDIDATE: (
+		"رسید تحویل انتخاب‌شده برای این ردیف فاکتور معتبر یا قابل انتخاب نیست."
+	),
+}
+
+
+def _missing_row_deliveries(rows_by_key, deliveries):
+	"""Refuse a delivery lookup that skipped an invoice row.
+
+	Reading a missing row as "no delivery" would silently turn a linked shipment into a
+	provisional registration, which is the one direction the rule must never fail in.
+	"""
+	for row_key in rows_by_key:
+		if row_key not in deliveries:
+			raise RegistrationError(
+				CODE_DELIVERY_NOT_A_CANDIDATE,
+				f"رسیدهای تحویل ردیف {row_key} خوانده نشده‌اند.",
+			)
+
+
+def _resolve_row_delivery(deliveries, selections, row_key, cache):
+	"""The delivery decision for one row, decided once and reused for its serials."""
+	if row_key in cache:
+		return cache[row_key]
+
+	if deliveries is None:
+		choice = delivery_rules.DeliveryChoice(status=delivery_rules.STATUS_PROVISIONAL)
+	else:
+		choice = delivery_rules.select_delivery(
+			deliveries.get(row_key, ()),
+			requested_note=selections.get(row_key),
+		)
+
+	cache[row_key] = choice
+
+	return choice
+
+
 def _delimiter_conflict(serial, delimiter_set):
 	"""The delimiter that appears inside a serial, if any.
 
@@ -198,6 +250,8 @@ def plan_registration(
 	replaced_rows=(),
 	delimiters=(),
 	policy=None,
+	deliveries=None,
+	selections=None,
 ):
 	"""Decide what may be registered and what is wrong.
 
@@ -212,6 +266,13 @@ def plan_registration(
 	serials are not duplicates and are not still on the row when its requirement is compared.
 	A serial that lives on a row which is **not** being replaced stays in the set of
 	already-registered serials, and stays refused.
+
+	`deliveries` maps a row key to its `DeliveryCandidate` rows and `selections` maps a row key
+	to the delivery note an operator named for it. When `deliveries` is `None` nothing is known
+	about deliveries — the file import path, which carries no delivery — and every accepted
+	serial is provisional. When it is a mapping, every row of `rows` must have a key, empty
+	tuple included: an absent key would be a row whose delivery nobody looked up, and reading
+	that as "no delivery" would mark a linked shipment as provisional.
 	"""
 	policy = policy or normalization.NormalizationPolicy()
 	delimiter_set = delimiter_rules.DelimiterSet.of(delimiters)
@@ -220,6 +281,12 @@ def plan_registration(
 
 	rows_by_key = _index_rows(rows)
 	existing_counts, existing_serials, _ = _index_existing(existing)
+
+	if deliveries is not None:
+		_missing_row_deliveries(rows_by_key, deliveries)
+
+	selections = selections or {}
+	resolved = {}
 
 	if replaced_rows:
 		replaced = frozenset(replaced_rows)
@@ -262,6 +329,22 @@ def plan_registration(
 				SerialIssue(
 					code=CODE_ROW_NOT_ELIGIBLE,
 					message="برای کالای این ردیف ثبت سریال فعال نیست.",
+					row_key=row_key,
+					serials=(raw_serial,),
+				)
+			)
+			continue
+
+		# One decision per row, made once: the same row's serials all belong to the same
+		# delivery, and a row whose delivery cannot be decided refuses all of them for the same
+		# reason rather than reporting a different problem per serial.
+		choice = _resolve_row_delivery(deliveries, selections, row_key, resolved)
+
+		if choice.code is not None:
+			issues.append(
+				SerialIssue(
+					code=choice.code,
+					message=DELIVERY_MESSAGES[choice.code],
 					row_key=row_key,
 					serials=(raw_serial,),
 				)
@@ -325,7 +408,15 @@ def plan_registration(
 
 		seen_in_submission[serial.normalized] = row_key
 		accepted_counts[row_key] = accepted_counts.get(row_key, 0) + 1
-		accepted.append(AcceptedSerial(row_key=row_key, item_code=row.item_code, serial=serial))
+		accepted.append(
+			AcceptedSerial(
+				row_key=row_key,
+				item_code=row.item_code,
+				serial=serial,
+				delivery_note=choice.delivery_note,
+				delivery_note_item=choice.delivery_note_item,
+			)
+		)
 
 	# Unconditional: a row may never hold more serials than its invoiced quantity. This used to be
 	# switched off by `allow_over_quantity`, and it is not optional any more — the cap is the rule,

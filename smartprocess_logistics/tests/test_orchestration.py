@@ -84,6 +84,11 @@ class FakeGateway:
 	# locking read, which is the difference between the count the capacity rule decides on and
 	# whatever the transaction's view happened to hold.
 	existing_reads: list = field(default_factory=list)
+	# The delivery rows of each invoice row, and the delivery links of a serial's other
+	# registrations. Empty by default: a row nobody delivered is registered provisionally, which
+	# is the shape every test that is not about deliveries expects.
+	deliveries: dict = field(default_factory=dict)
+	other_links: dict = field(default_factory=dict)
 
 	def _record(self, name):
 		self.calls.append(name)
@@ -109,6 +114,17 @@ class FakeGateway:
 		self.existing_reads.append(for_update)
 
 		return tuple(self.existing)
+
+	def delivery_candidates(self, invoice_name, row_keys):
+		"""Every row asked for, empty tuple included — the validator refuses a missing key."""
+		self._record("delivery_candidates")
+
+		return {row_key: tuple(self.deliveries.get(row_key, ())) for row_key in row_keys}
+
+	def delivery_links(self, identities):
+		self._record("delivery_links")
+
+		return {identity: tuple(self.other_links.get(identity, ())) for identity in identities}
 
 	def lock_serials(self, item_codes):
 		self._record("lock_serials")
@@ -380,6 +396,10 @@ class TestRunRewrite(UnitTestCase):
 				"read_rows",
 				"lock_serials",
 				"read_existing",
+				# The rows' deliveries are read here too: a serial added by an import belongs to
+				# the shipment that carried it, and the link is decided on the documents as they
+				# are now, not on what the caller believed when it built the file.
+				"delivery_candidates",
 				"find_or_create_serials",
 				"insert_assignments",
 			],
