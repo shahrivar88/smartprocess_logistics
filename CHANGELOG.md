@@ -5,11 +5,12 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased — 2026-10-30
+## 0.6.0 — 2026-11-15
 
-**Report consolidation, weight/volume completion and purchase-to-stock fixes verified on
-`SmartProcessERP` (port 8080). Not tagged and not released.** The version in
-`smartprocess_logistics/__init__.py` remains `0.5.1`.
+**GitHub publication of the approved tree at `f50e761`.** The application source is the tree
+deployed and verified on `SmartProcessERP`. This release adds version metadata, release
+documentation, and the corrections to documentation drift; it does not change the deployed
+application.
 
 ### Added
 
@@ -63,8 +64,8 @@ uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Verified
 
-- Full database-free suite: **1523 tests OK** — 12 skipped with the system interpreter and 2 with
-  the isolated `openpyxl` environment. The focused purchase rules suite is 32 tests, all passing.
+- Full database-free suite on the release commit: **1592 tests OK**, 12 skipped with the system
+  interpreter. The focused purchase rules suite is 32 tests, all passing.
 - Isolated end-to-end cancellation on `SmartProcessERP` in `_Test Company`: a submitted Purchase
   Invoice (`BI-260158`) and its submitted Purchase Receipt (`BR-050005`) were created; cancelling
   the invoice first was refused with a `ValidationError` that named `BR-050005` and left the
@@ -81,9 +82,12 @@ uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Known limitations
 
-- `smartprocee_erpnext_homepage` is not Frappe 16.53 compatible: it imports the removed
-  `frappe.boot.get_sidebar_items`, so `get_bootinfo` fails for non-Administrator users. It is a
-  separate app and was not modified.
+- The Serial Ledger has no Report document: `core.reports.build_register_query` is written and
+  tested, but it is reachable only from a console or a future report.
+- There is no custom Stock Movement report. ERPNext's standard `Stock Ledger` report is the
+  supported movement view.
+- This release is source and documentation only. No production deployment, migration or restart
+  is part of it.
 - Purchase serial tracking through Purchase Receipt, warehouse transfer, sales and warranty is
   designed but not implemented; serial work remains Sales-Invoice-side.
 - The cancel guard has three edges. A cancel that sets `doc.flags.ignore_links` bypasses it,

@@ -8,14 +8,15 @@ per Item and is **independent of ERPNext's own stock serial numbers**: the app d
 on `Item.has_serial_no`, does not create or edit `Serial No` or `Serial and Batch Bundle`
 records, and never posts stock or accounting entries.
 
-## Release 0.5.1
+## Release 0.6.0
 
-Version 0.5.1 is the GitHub publication of the production-approved 0.5.0 functionality. The
-application source matches the `SmartProcessERP` deployment. This release adds version metadata
-and release documentation only. It includes the Workspace «انبار و خرید» permission fix, the five
-Logistics reports, the Sales Order progress panel, and the Sales Invoice warehouse and Item
-selectors. The Commitment work remains deferred and excluded. See `CHANGELOG.md` for the
-verification record, known limitations, and the future Persian/Jalali filtering work.
+Version 0.6.0 is the GitHub publication of the approved tree at `f50e761`. The application
+source is the tree deployed on `SmartProcessERP`. Compared with 0.5.1 it adds «تراز موجودی»
+and the Transit/Virtual split, the authorized-stock selectors, the Purchase Invoice cancel
+guard, and the per-delivery serial attribution. It ships seven Logistics reports, the Sales
+Order progress panel, and the Sales Invoice warehouse and Item selectors. The Commitment work
+remains deferred and excluded. See `CHANGELOG.md` for the verification record, known
+limitations, and the future Persian/Jalali filtering work.
 
 ## Reports
 
@@ -28,8 +29,8 @@ query per row.
 | Sales Serial Register | one row per serial assignment | which serial was sold on which invoice, and when it was registered | `core.reports.build_register_query` only; no Report document ships, so it is reachable from a future report or a console and from nowhere else |
 | Missing Sales Serials | one row per serial-required invoice item row | which rows still need serials, and how many | ships, as a Script Report with Persian columns and Persian filters |
 
-The app ships six Logistics reports. «تراز موجودی» is the primary operational report; the other
-five remain available:
+The app ships seven Logistics reports. «تراز موجودی» is the primary operational report; the
+other six remain available:
 
 - **«تراز موجودی»** — physical, Transit and Virtual stock are shown separately. Only physical
   and Transit count toward operational shortage, so Virtual stock never hides a shortage.
@@ -77,14 +78,12 @@ and the integration proofs in `docs/test-manifest.md`. See `CHANGELOG.md` for th
 known limitations, and future Persian/Jalali filtering work. The existing `v0.5.0` tag remains
 unchanged.
 
-**Unreleased — 2026-10-30.** The development branch contains the report-consolidation,
-weight/volume and purchase-to-stock fixes verified on `SmartProcessERP` (port 8080):
-«تراز موجودی» as the primary operational report, Physical/Transit stock separated with Virtual
-excluded from availability and shortage, the Purchase Receipt weight/volume panel, invoice-first
-receipt validation with a Virtual-only rejected warehouse, and the v16 Dock/apps-screen entry
-beside the legacy Desktop Icon. The branch is committed for review and is not tagged or
-released. The database-free suite passes: 1508 tests, with 2 skipped in the isolated `openpyxl`
-environment and 12 with the system interpreter.
+**0.6.0 — 2026-11-15.** GitHub publication of the approved tree: «تراز موجودی» as the primary
+operational report, Physical/Transit stock separated with Virtual excluded from availability and
+shortage, the authorized-stock selectors behind their settings, the Purchase Invoice cancel
+guard, per-delivery serial attribution, and the v16 Dock/apps-screen entry. Published from
+`release/v0.6.0`; `main` is untouched. The database-free suite passes: 1592 tests, with 12
+skipped in the system interpreter. No production deployment is part of this release.
 
 **0.4.0 — a release candidate, not deployed.** It adds the transfer of a cancelled invoice's
 serials onto its amendment, and the three restores (see below). None of it is installed on
@@ -299,7 +298,7 @@ that mapping is confirmed.
 
 ## Secure API layer
 
-`smartprocess_logistics/api/` holds seventeen whitelisted endpoints and the gateway they drive. They
+`smartprocess_logistics/api/` holds sixteen whitelisted endpoints and the gateway they drive. They
 are reachable as soon as the app is installed, and reachable only through that gateway.
 
 | Endpoint | Needs | Does |
@@ -705,12 +704,10 @@ pair cannot be edited apart.
 The panel header shows that sidebar's title, and, underneath it, the app's own name, which the
 framework reads from the app data rather than from any field this app owns.
 
-The current development branch adds the v16 app entry: `dock/smartprocess_logistics/` is the
-standard Dock record, and `add_to_apps_screen` in `hooks.py` is the apps-screen hook. The custom
-homepage app on `SmartProcessERP` still renders the legacy icon grid, so
-`desktop_icon/لجستیک.json` remains as a compatibility entry and links the «انبار و خرید»
-Workspace Sidebar. The `SmartProcess Logistics` Sidebar shown with that workspace is also part of
-the app.
+The v16 app entry is `dock/smartprocess_logistics/`, the standard Dock record, together with
+`add_to_apps_screen` in `hooks.py`. `desktop_icon/لجستیک.json` remains as a compatibility entry
+for sites that still render the legacy icon grid, and links the «انبار و خرید» Workspace
+Sidebar. The `SmartProcess Logistics` Sidebar shown with that workspace is also part of the app.
 
 ## Approved scope
 
@@ -1022,10 +1019,11 @@ has not been run; see [Installation](#installation).
 - **A serial that a spreadsheet displays in scientific notation is copied that way.** A numeric
   cell holding fourteen digits may reach the clipboard as `6.95543E+13`; the app stores the text it
   is given, faithfully. Store serial columns as **text** in the workbook.
-- **The custom homepage app is not Frappe 16.53 compatible.** `smartprocee_erpnext_homepage`
-  imports `get_sidebar_items` from `frappe.boot`, which this Frappe version no longer exports, so
-  `get_bootinfo` fails for non-Administrator users. It is a separate app and was not modified.
-  The standard v16 Dock/apps-screen entry and the legacy Desktop Icon ship alongside it.
+- **The custom homepage app is no longer installed.** `smartprocee_erpnext_homepage` imported
+  `get_sidebar_items` from `frappe.boot`, which Frappe v16 no longer exports, so `get_bootinfo`
+  failed for non-Administrator users. It was uninstalled from `SmartProcessERP`; the standard
+  v16 Dock/apps-screen entry does not depend on it, and the legacy Desktop Icon ships alongside
+  it as a compatibility entry only.
 - **Purchase serial tracking is not implemented.** Serial capture and movement remain
   Sales-Invoice-side only; Purchase Receipt, warehouse transfer, sales and warranty are not yet
   connected into one purchase-serial flow.

@@ -25,9 +25,9 @@ app_description = "شماره سریال گارانتی اختیاری برای 
 app_email = "info@smartprocess.local"
 app_license = "mit"
 
-# Frappe v16's apps screen and dock. The custom homepage app on this site still renders the
-# legacy icon grid, so `desktop_icon/لجستیک.json` remains as the compatibility entry; this hook
-# and `dock/smartprocess_logistics/` are the supported v16 entry and must not be removed.
+# Frappe v16's apps screen and dock. `desktop_icon/لجستیک.json` remains as a compatibility
+# entry for sites that still render the legacy icon grid; this hook and
+# `dock/smartprocess_logistics/` are the supported v16 entry and must not be removed.
 app_home = "/app/warehouse-and-purchasing"
 add_to_apps_screen = [
 	{
