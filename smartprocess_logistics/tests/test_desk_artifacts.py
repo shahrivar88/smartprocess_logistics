@@ -275,6 +275,42 @@ class TestModuleSidebar(UnitTestCase):
 			"a report this app ships is reachable from the module sidebar",
 		)
 
+	def test_the_serial_pages_share_one_collapsible_section(self):
+		# Split across three sections, the workspace link, the serial operations and the
+		# settings read as three separate panels, and the panel header repeats for each.
+		# One section is the shape the module has: the pages it holds, and nothing beside them.
+		items = list(module_sidebar()[1].get("items") or [])
+		serial_pages = {
+			"Logistics",
+			"Logistics Serial",
+			"Logistics Serial Assignment",
+			"Logistics Import Session",
+			"Logistics Settings",
+		}
+		owners = [
+			index
+			for index in section_indexes(items)
+			if serial_pages & {child.get("link_to") for child in section_children(items, index)}
+		]
+
+		self.assertEqual(len(owners), 1, "the serial pages are split across more than one section")
+
+		index = owners[0]
+		section = items[index]
+
+		self.assertEqual(section.get("label"), "سریال لجستیک")
+		self.assertEqual(section.get("collapsible"), 1, "«سریال لجستیک» does not expand and collapse")
+		self.assertEqual(
+			{child.get("link_to") for child in section_children(items, index)},
+			serial_pages,
+			"the section carries a serial page the panel no longer lists, or lost one",
+		)
+		self.assertEqual(
+			[items[position].get("label") for position in section_indexes(items)],
+			["گزارش‌ها", "خرید", "انبار", "فروش", "سریال لجستیک"],
+			"the panel has a section the module does not need",
+		)
+
 	def test_a_link_is_not_listed_twice(self):
 		links = [
 			(item.get("link_type"), item.get("link_to"))

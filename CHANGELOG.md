@@ -5,6 +5,40 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.2 — 2026-11-16
+
+**The serial pages are one section again.** They were split across three Section Breaks —
+«سریال لجستیک» holding only the Workspace link, «سریال‌ها» holding the three serial pages and
+«تنظیمات» holding the settings page — so the panel showed three unrelated groups for one
+feature. They are now one collapsible «سریال لجستیک» section.
+
+### Fixed
+
+- **«سریال لجستیک» is a single collapsible section.** It holds the `Logistics` Workspace link
+  (سریال لجستیک), `Logistics Serial` (شماره سریال), `Logistics Serial Assignment` (ارجاع سریال به
+  فاکتور), `Logistics Import Session` (پیش‌نمایش درج) and `Logistics Settings` (تنظیمات سریال), each
+  nested with `child: 1`.
+- **The «سریال‌ها» and «تنظیمات» Section Breaks are gone.** The panel no longer repeats a header
+  for pages that belong to the same feature.
+
+### Unchanged
+
+- Every link's label, icon, route, target DocType and position relative to the other pages; the
+  «گزارش‌ها», «خرید», «انبار» and «فروش» sections; the «انبار و خرید» link; both Workspaces and
+  their cards; report roles and record permissions. Warehouse classification, inventory figures,
+  accounting, serial rules and measurement snapshots are not touched.
+
+### Verified
+
+- `tests/test_desk_artifacts.py` gains
+  `test_the_serial_pages_share_one_collapsible_section`, which fails on the 0.7.1 layout (three
+  owners for the serial pages, seven sections) and passes on this one (one owner, five sections).
+- Every DocType, Report and Workspace the sidebar links to was resolved on the site; no link
+  targets a document that is missing or disabled, and no `Custom Sidebar` row overrides the
+  shipped definition.
+- The reloaded `Sidebar` document carries 27 items, and the resolved boot payload nests all five
+  serial links under the one section.
+
 ## 0.7.1 — 2026-11-16
 
 **The module sidebar renders its sections again.** In Frappe 16 the Desk module panel nests a

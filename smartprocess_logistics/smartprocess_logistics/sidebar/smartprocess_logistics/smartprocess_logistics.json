@@ -464,26 +464,6 @@
    "key": null
   },
   {
-   "type": "Section Break",
-   "label": "سریال‌ها",
-   "link_type": "DocType",
-   "link_to": null,
-   "icon": "hash",
-   "child": 0,
-   "indent": 0,
-   "collapsible": 1,
-   "keep_closed": 0,
-   "url": null,
-   "show_arrow": 0,
-   "filters": null,
-   "route_options": null,
-   "navigate_to_tab": null,
-   "open_in_new_tab": 1,
-   "hidden": 0,
-   "added": 0,
-   "key": null
-  },
-  {
    "type": "Link",
    "label": "شماره سریال",
    "link_type": "DocType",
@@ -544,26 +524,6 @@
    "key": null
   },
   {
-   "type": "Section Break",
-   "label": "تنظیمات",
-   "link_type": "DocType",
-   "link_to": null,
-   "icon": "settings",
-   "child": 0,
-   "indent": 0,
-   "collapsible": 1,
-   "keep_closed": 0,
-   "url": null,
-   "show_arrow": 0,
-   "filters": null,
-   "route_options": null,
-   "navigate_to_tab": null,
-   "open_in_new_tab": 1,
-   "hidden": 0,
-   "added": 0,
-   "key": null
-  },
-  {
    "type": "Link",
    "label": "تنظیمات سریال",
    "link_type": "DocType",
@@ -584,7 +544,7 @@
    "key": null
   }
  ],
- "modified": "2026-11-16 15:00:00.000000",
+ "modified": "2026-11-16 16:30:00.000000",
  "module": "SmartProcess Logistics",
  "name": "SmartProcess Logistics",
  "standard": 1,
