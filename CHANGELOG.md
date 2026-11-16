@@ -5,6 +5,34 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.6 — 2026-11-16
+
+**The app is now installable from GitHub on another ERPNext system, and the install command in
+the README was wrong.**
+
+### Added
+
+- `docs/installation.md` — the portable install path in one place: the versions actually
+  verified (`frappe` 16.55.2, `erpnext` 16.54.0), required and optional dependencies, the
+  install, asset-build and translation commands with a `<site>` placeholder, the initial
+  configuration checklist, warehouse classification, the company/account/currency assumptions,
+  upgrade, rollback and the unverified scenarios.
+
+### Fixed
+
+- **The README's install command could not work.** It read
+  `bench get-app <repository-url> smartprocess_logistics`. Measured against the installed bench
+  (`bench get-app --help`, and `bench/commands/make.py`): the usage is
+  `bench get-app [OPTIONS] [NAME]... GIT_URL`, the app name positional is a dummy kept for
+  backward compatibility, and the **last** positional is the Git URL. The README therefore
+  passed the app name as the URL and the URL as an ignored argument. The command is now
+  `bench get-app <repository-url>` followed by a `git checkout` that pins the release tag.
+
+### Unchanged
+
+- No Python or JavaScript behaviour, no DocType, no Custom Field, no patch, no permission, no
+  navigation, no schema change. `locale/fa.po` and its compiled form are untouched.
+
 ## 0.7.5 — 2026-11-16
 
 **The Persian module label now survives a container recreate on the stack this app is deployed

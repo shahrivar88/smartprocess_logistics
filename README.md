@@ -886,10 +886,16 @@ Frappe v16 and ERPNext v16, and `openpyxl` for the XLSX reader — nothing else.
 host, port or container path is compiled into the application.
 
 ```bash
-bench get-app <repository-url> smartprocess_logistics
+bench get-app https://github.com/shahrivar88/smartprocess_logistics
+git -C apps/smartprocess_logistics checkout v0.7.6
 bench --site <site> install-app smartprocess_logistics
 bench build --app smartprocess_logistics
 ```
+
+`bench get-app` takes one positional argument, the Git URL; every other positional value is
+ignored. The app name comes from the repository and `pyproject.toml`, so it is not passed. The
+`git checkout` pins the verified release. `docs/installation.md` is the full guide: verified
+versions, dependencies, initial configuration, upgrade and rollback.
 
 **`bench build` is required on a normal bench, and there is nothing to configure.** The app ships
 its stylesheet as a plain asset path (`app_include_css = /assets/smartprocess_logistics/css/…`)
