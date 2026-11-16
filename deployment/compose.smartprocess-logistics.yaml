@@ -67,6 +67,25 @@ x-logistics-assets: &logistics-assets
   target: /home/frappe/frappe-bench/assets/smartprocess_logistics
   read_only: true
 
+# The compiled Persian catalogue, mounted as a single file rather than compiled inside the
+# container. `bench build --app` writes `sites/assets/locale/<lang>/LC_MESSAGES/<app>.mo`, and
+# in this stack `sites/assets` is the symlink above, which resolves into `bench/assets` — image
+# content, not the `sites` volume. A catalogue compiled at runtime is therefore erased by the
+# next container recreate, and the Persian module label silently reverts to English. Shipping
+# the `.mo` in the app and binding it here makes the label survive a recreate.
+#
+# Mounting the file, not a directory: `assets/locale/fa/LC_MESSAGES/` also holds `frappe.mo`
+# and `erpnext.mo`, and a directory mount would hide them and break Persian site-wide.
+#
+# Backend only: the Desk fetches translations through the backend API (`get_all_translations`),
+# and the catalogue holds the module label, which nothing in a background job renders. An entry
+# added later for text that emails or reports render belongs on the workers too.
+x-logistics-catalogue: &logistics-catalogue
+  type: bind
+  source: ${SMARTPROCESS_LOGISTICS_APP_PATH}/smartprocess_logistics/locale/fa/LC_MESSAGES/smartprocess_logistics.mo
+  target: /home/frappe/frappe-bench/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo
+  read_only: true
+
 services:
   configurator:
     volumes:
@@ -77,6 +96,7 @@ services:
     volumes:
       - *logistics-app
       - *logistics-pth
+      - *logistics-catalogue
 
   frontend:
     volumes:

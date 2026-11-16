@@ -900,21 +900,40 @@ inlines `doctype_js` into the DocType's own metadata rather than serving it as a
 in v16: `desk/form/meta.py::_add_code`). A bench that installs the app and never builds it is a
 working app with an unstyled window, not a broken one — and one command fixes it.
 
-**The Persian module label needs that build, or one command.** Frappe v16 reads translations from a
-compiled catalogue (`sites/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo`) and never from
-`translations/*.csv`, so the app ships `locale/fa.po`, and `bench build --app smartprocess_logistics`
-compiles it. On a stack that mounts `public/` instead of building, compile the catalogue directly:
+**The Persian module label reads a compiled catalogue, never the CSV.** Frappe v16 reads
+translations from `sites/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo`, so the app ships
+`locale/fa.po` and `bench build --app smartprocess_logistics` compiles it into that path. The
+catalogue holds one entry — the module label — and nothing else: the compiled catalogues of every
+installed app are merged per language, so a second entry would also translate that message wherever
+another app uses it. The other rows in `translations/fa.csv` are not read at runtime by v16.
+
+A site without the catalogue shows the English title and nothing else changes.
+
+**On a bench whose `assets` directory lives on disk**, that compile is the whole story: the `.mo`
+is a file in the bench, and a container restart or recreate does not remove it.
+
+**On a stack whose `assets` directory is image content, the compiled file does not survive a
+recreate.** `sites/assets` there is a symlink into the image's `bench/assets`, so a catalogue
+compiled inside the running container is erased by the next `up -d --force-recreate`, and the label
+silently reverts to English. For that case the app ships the compiled
+`locale/fa/LC_MESSAGES/smartprocess_logistics.mo` and
+`deployment/compose.smartprocess-logistics.yaml` bind-mounts that one file over the path Frappe
+reads. It is the file, not its directory: `assets/locale/fa/LC_MESSAGES/` also holds `frappe.mo`
+and `erpnext.mo`, and a directory mount would hide them and break Persian site-wide. Verified after
+a recreate: `resolve_sidebar("SmartProcess Logistics", "Administrator")` returns
+`لجستیک پردازش هوشمند`, and `resolve_sidebar("Accounts", …)` is still `حسابداری`.
+
+The shipped `.mo` is a source file in that arrangement, so `tests/test_translations.py` fails if it
+stops matching `locale/fa.po`. Regenerate it after editing the `.po`:
 
 ```bash
 bench --site <site> compile-translations --app smartprocess_logistics --locale fa
+# then copy sites/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo into the app's locale/fa/
 ```
-
-Either way the `.mo` lands in `sites/assets`, inside the site's own volume, so it survives a
-container recreate. A site without it shows the English title; nothing else depends on it.
 
 `deployment/compose.smartprocess-logistics.yaml` is optional site wiring for one Docker stack: it
 mounts `public/` over `assets/smartprocess_logistics`, which is why a stack wired that way needs no
-build step. The application works without it.
+build step for the stylesheet. The application works without it.
 
 ### What the install does
 

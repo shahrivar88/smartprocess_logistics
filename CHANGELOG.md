@@ -5,6 +5,47 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.5 — 2026-11-16
+
+**The Persian module label now survives a container recreate on the stack this app is deployed
+to. It did not before, and 0.7.4 said it did.**
+
+### Fixed
+
+- **A catalogue compiled inside the running container is erased by the next recreate.** 0.7.4
+  claimed the compiled `.mo` "lands in `sites/assets` … inside the site's volume, so it survives a
+  container recreate". Measured on the deployment stack, that is false. `sites/assets` is a
+  symlink to `bench/assets` (`lrwxrwxrwx … sites/assets -> /home/frappe/frappe-bench/assets`), and
+  `bench/assets` is image content: only `sites` is a volume. `compile-translations` therefore wrote
+  into a layer the container recreate discards. Proven by running it, recreating `backend`, and
+  finding `sites/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo` gone while
+  `smartprocess_logistics.__version__` still read `0.7.4` from the bind mount.
+- **The compiled catalogue now ships with the app** at
+  `smartprocess_logistics/locale/fa/LC_MESSAGES/smartprocess_logistics.mo`, and
+  `deployment/compose.smartprocess-logistics.yaml` binds that one file over
+  `/home/frappe/frappe-bench/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo` on `backend`.
+  The file survives the recreate because it lives on the host, in the release snapshot. It is
+  mounted file-over-file, not directory-over-directory: `assets/locale/fa/LC_MESSAGES/` also holds
+  `frappe.mo` and `erpnext.mo`, and hiding those would break Persian site-wide.
+- **The `.mo` is a source file in this arrangement**, so two tests hold it to the `.po`:
+  `test_the_shipped_catalogue_is_the_compiled_po` compares the compiled catalogue against
+  `locale/fa.po` entry by entry, and `test_a_message_outside_the_catalogue_is_left_alone` asserts
+  `Purchase Invoice` is still untranslated by this app.
+
+### Unchanged
+
+- No schema change, no DocType, no Custom Field, no patch, no Python or JavaScript behaviour, no
+  permission and no navigation change. `locale/fa.po` is untouched; only its compiled form is now
+  shipped.
+
+### Verified on the deployment stack
+
+- `resolve_sidebar("SmartProcess Logistics", "Administrator")` → `لجستیک پردازش هوشمند`, and
+  `resolve_sidebar("Accounts", "Administrator")` → `حسابداری`, so the one-entry catalogue did not
+  reach another app's label.
+- After `up -d --force-recreate backend` against the mounted snapshot, the label still resolves to
+  Persian.
+
 ## 0.7.4 — 2026-11-16
 
 **The Persian module label actually reaches the desk: the app now ships the compiled catalogue

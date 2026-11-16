@@ -6,6 +6,7 @@ app needs, and hold that message to the title the sidebar actually carries.
 """
 
 import ast
+import gettext
 import json
 import pathlib
 
@@ -15,6 +16,7 @@ APP = pathlib.Path(__file__).resolve().parent.parent
 MODULE = APP / "smartprocess_logistics"
 LOCALE = APP / "locale"
 CATALOGUE = LOCALE / "fa.po"
+COMPILED = LOCALE / "fa" / "LC_MESSAGES" / "smartprocess_logistics.mo"
 SIDEBAR = MODULE / "sidebar" / "smartprocess_logistics" / "smartprocess_logistics.json"
 CSV = APP / "translations" / "fa.csv"
 
@@ -86,3 +88,28 @@ class TestPersianModuleLabel(UnitTestCase):
 
 	def test_no_other_catalogue_could_translate_a_message_another_app_owns(self):
 		self.assertEqual([path.name for path in LOCALE.glob("*.po")], ["fa.po"])
+
+	def test_the_shipped_catalogue_is_the_compiled_po(self):
+		"""The `.mo` the deploy mounts must say what the `.po` says.
+
+		It is shipped rather than compiled at deploy time because this stack's `sites/assets`
+		resolves into image content, so a catalogue compiled inside the container is erased by
+		the next recreate. That makes the `.mo` a source file, and this test the thing that
+		keeps it honest when the `.po` changes.
+		"""
+		self.assertTrue(COMPILED.is_file())
+
+		with COMPILED.open("rb") as handle:
+			compiled = gettext.GNUTranslations(handle)
+		shipped = {
+			msgid: compiled.gettext(msgid) for msgid in translated_entries(CATALOGUE)
+		}
+
+		self.assertEqual(shipped, translated_entries(CATALOGUE))
+		self.assertEqual(shipped, {"SmartProcess Logistics": PERSIAN})
+
+	def test_a_message_outside_the_catalogue_is_left_alone(self):
+		with COMPILED.open("rb") as handle:
+			compiled = gettext.GNUTranslations(handle)
+
+			self.assertEqual(compiled.gettext("Purchase Invoice"), "Purchase Invoice")

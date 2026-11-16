@@ -1013,3 +1013,28 @@ exactly one entry; that entry's `msgid` equals the `title` of the shipped `Sideb
 
 Evidence: `python -m unittest discover -s smartprocess_logistics/tests -t .` — **1,694 tests, OK,
 12 skipped**; with the isolated interpreter that has `openpyxl`, **1,694 tests pass with 2 skips**.
+
+## 0.7.5 — the catalogue that survives a recreate (2026-11-16)
+
+The claim above that the compiled catalogue "survives a container recreate" holds only where
+`bench/assets` is on disk. On the deployment stack it is not: `sites/assets` is a symlink to
+`/home/frappe/frappe-bench/assets`, which is image content, and only `sites` is a volume. Measured:
+`compile-translations` wrote `sites/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo`, then
+`up -d --force-recreate backend` removed it while the bind-mounted app still reported `0.7.4`.
+
+The compiled catalogue is now shipped at
+`smartprocess_logistics/locale/fa/LC_MESSAGES/smartprocess_logistics.mo` and mounted file-over-file
+into the path Frappe reads, so it lives on the host and survives the recreate.
+
+Two tests join the seven above, both using the standard library's `gettext` on the shipped binary:
+
+- `test_the_shipped_catalogue_is_the_compiled_po` — every `msgid` in `locale/fa.po` resolves
+  through the `.mo` to the same `msgstr`. This is what fails when the `.po` is edited and the
+  binary is not regenerated.
+- `test_a_message_outside_the_catalogue_is_left_alone` — `Purchase Invoice` still resolves to
+  itself, so the catalogue cannot drift into translating another app's message.
+
+Evidence: `python -m unittest discover -s smartprocess_logistics/tests -t .` — **1,696 tests, OK,
+12 skipped**. Live: `resolve_sidebar("SmartProcess Logistics", "Administrator")` →
+`لجستیک پردازش هوشمند`; `resolve_sidebar("Accounts", "Administrator")` → `حسابداری`; both still
+true after `up -d --force-recreate backend`.
