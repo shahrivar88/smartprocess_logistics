@@ -36,10 +36,12 @@ def approved_doctype_js():
 		# Settings single because that is where an administrator looks for them, and they are the
 		# only supported way to carry the history across a removal. The classification table
 		# follows them: it keeps the grid complete in front of the server's own refusal and
-		# decides no classification itself.
+		# decides no classification itself. The third one renders the inter-app registry, which is
+		# read-only by design: it shows what the app depends on and what it applied to the site.
 		"Logistics Settings": [
 			"public/js/logistics_settings_transfer.js",
 			"public/js/logistics_settings_classification.js",
+			"public/js/logistics_settings_dependencies.js",
 		],
 		# One Link query for one purpose: in a Material Transfer, the Item Code selector offers
 		# the items that are actually in the row's source warehouse. It replaces the form's own

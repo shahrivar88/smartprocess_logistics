@@ -251,6 +251,30 @@ class TestModuleSidebar(UnitTestCase):
 						f"«{child.get('label')}» is not nested, so the panel drops it",
 					)
 
+	def test_every_section_break_is_drawn_as_a_row_like_a_standard_sidebar(self):
+		# `sidebar_item.html` draws a Section Break two ways. Only `indent == 1` renders it as an
+		# ordinary row with an icon; `indent == 0` renders the bare heading branch, and
+		# `sidebar.scss` gives that heading a 16px top margin
+		# (`.sidebar-items > .section-item:has(.section-break):not(:first-child)`). Every sidebar
+		# ERPNext ships — Buying, Stock — uses the row, so the heading branch was the only thing
+		# in the panel that stood apart from its neighbours.
+		_items = list(module_sidebar()[1].get("items") or [])
+		for index in section_indexes(_items):
+			section = _items[index]
+
+			with self.subTest(section=section.get("label")):
+				self.assertEqual(
+					section.get("indent"),
+					1,
+					"a Section Break with indent 0 is drawn as a heading, and the heading carries "
+					"the 16px margin that sets it apart from the rows around it",
+				)
+				self.assertEqual(section.get("collapsible"), 1, "the section does not expand and collapse")
+				self.assertTrue(
+					section.get("icon"),
+					"a section row draws its icon; without one the desk falls back to `list`",
+				)
+
 	def test_the_reports_section_holds_every_report_and_nothing_else(self):
 		items = list(module_sidebar()[1].get("items") or [])
 		index = next(

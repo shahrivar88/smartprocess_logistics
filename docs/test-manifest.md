@@ -924,3 +924,61 @@ approved function matched all 203 neutral-commitment cases; the draft unlinked m
 Note was refused by both validators with `DN_NOT_LINKED`; a non-managed physical draft was
 allowed, inserted and deleted; the virtual bundle Delivery Note was refused while the physical
 bundle invoice posted and was cancelled. No document or Item remains.
+
+## 0.7.3 — the sidebar spacing, the Persian module label, and the inter-app registry (2026-11-16)
+
+Three changes, one release. Each has a test that fails when the change is undone.
+
+### The Sidebar spacing
+
+The `SmartProcess Logistics` Sidebar imported five Section Breaks. In v16 a Section Break row
+renders as a bare heading only when its `indent` is not `1`; otherwise it renders as the ordinary
+icon row. The stray Desk rule `.sidebar-items > .section-item:has(.section-break):not(:first-child)
+{margin-top: 16px}` then applied to a heading row that was already separated by the row's own
+height, which is the gap in the screenshot.
+
+The fix is in the app's own `sidebar/smartprocess_logistics/smartprocess_logistics.json`: all
+five Section Breaks (`گزارشها`, `خرید`, `انبار`, `فروش`, `سریال لجستیک`) now carry `indent: 1`,
+so they render as the standard Frappe row and the standard spacing applies. No global Sidebar CSS
+was added and no other app's CSS was touched. `test_stage_d_artifacts` holds every Section Break to
+`indent == 1`.
+
+### The Persian module label
+
+`resolve_sidebar` renders `_(base.title or shell)`, so the module label is a translation of the
+title, not a rename of it. The row `SmartProcess Logistics,لجستیک پردازش هوشمند` in
+`translations/fa.csv` is therefore the whole change: the file, module, DocType, route and package
+names stay in English, and a site without Persian still sees the English label.
+`test_stage_d_artifacts.test_the_module_name_is_shown_in_persian_without_being_renamed` asserts
+the row.
+
+### The inter-app registry
+
+`وابستگی‌ها و تغییرات بین‌ماژولی` is a Tab on `Logistics Settings`. It is assembled, not stored:
+
+- `core/interop.py` — no Frappe import. `DEPENDENCIES` (three apps) and `APPLIED_CHANGES` (fourteen
+  entries) are version-controlled metadata; `rows(facts)` joins them with facts read from a site and
+  decides each row's status from those facts alone.
+- `interop.py` — one whitelisted GET, `dependency_rows`, guarded by
+  `has_permission("Logistics Settings", "read")`. It reads installed apps and versions, the
+  existence of the fixture records and roles, and the presence of the Custom Fields in the doctype
+  metadata. It writes nothing.
+- `public/js/logistics_settings_dependencies.js` — renders the two sections and nothing else.
+- `logistics_settings.json` — a Tab Break, a Section Break and an HTML field. No DB column, so no
+  schema migration.
+- `public/css/logistics.css` — the `.sp-interop-*` block, logical properties only.
+
+A dependency is a statement about an app; an applied change is a statement about the site, and only
+the second may read `اعمال شده`. A hook-registered change has no site fact to read, so its
+verification text points at `hooks.py` and the static tests instead of claiming a checked status.
+
+`tests/test_interop.py` (25 tests) holds the registry to the app: the doc-event and script lists
+must equal `hooks_composition`, the field checks must equal the `custom/*.json` files, the record
+checks must equal `fixtures/*.json`, the role names must equal the ones `setup/roles.py` imports,
+the CSS path must equal `app_include_css`, and `smartprocess_erpnext_accounting` must appear in no
+import. The status tests drive `rows()` with empty, partial and complete fact sets.
+
+Evidence: `python -m unittest discover -s smartprocess_logistics/tests -t .` — **1,687 tests, OK,
+12 skipped**. Ten of the twelve skips are XLSX tests that skip when `openpyxl` is absent; run with
+the isolated interpreter that has it (`.../.venv/Scripts/python.exe`), and **1,687 tests pass with
+2 skips** — the missing-library path and the development commitment composition, both by design.

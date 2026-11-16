@@ -734,3 +734,44 @@
 	margin-top: 4px;
 	white-space: normal;
 }
+
+/* The inter-app registry on Logistics Settings. One card per entry, because each entry carries
+ * the same seven facts and a seven-column table stops being readable. Logical properties only,
+ * so the cards follow the form's direction. */
+.sp-interop-entry {
+	border: 1px solid var(--border-color);
+	border-radius: var(--border-radius);
+	margin-bottom: 10px;
+	padding: 10px 12px;
+}
+
+.sp-interop-head {
+	align-items: center;
+	display: flex;
+	gap: 8px;
+	justify-content: space-between;
+	margin-bottom: 6px;
+}
+
+.sp-interop-facts {
+	border-collapse: collapse;
+	font-size: var(--text-sm);
+	width: 100%;
+}
+
+.sp-interop-facts th {
+	color: var(--text-muted);
+	font-weight: 400;
+	padding-block: 2px;
+	padding-inline-end: 8px;
+	text-align: start;
+	vertical-align: top;
+	white-space: nowrap;
+	width: 8.5rem;
+}
+
+.sp-interop-facts td {
+	padding-block: 2px;
+	vertical-align: top;
+	word-break: break-word;
+}

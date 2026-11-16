@@ -5,6 +5,58 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.3 — 2026-11-16
+
+**The sidebar breathes like the rest of the desk, the app answers to its Persian name, and the
+site can show what this app depends on and what it changed.**
+
+### Fixed
+
+- **The excessive gap between collapsed sidebar sections is gone.** In Frappe v16 a Section Break
+  renders one of two ways (`frappe/public/js/frappe/ui/sidebar/sidebar_item.html`): as an ordinary
+  row with an icon when `indent == 1`, or as a bare heading when it is not. The heading branch
+  carries `frappe/public/scss/desk/sidebar.scss:584`
+  (`.sidebar-items > .section-item:has(.section-break):not(:first-child) { margin-top: 16px }`),
+  and every Section Break in this app's sidebar had `indent: 0`, so each one drew that heading and
+  its 16px margin on top of the row's own spacing. All five — «گزارش‌ها», «خرید», «انبار», «فروش»
+  and «سریال لجستیک» — now carry `indent: 1`, the same value every sidebar ERPNext ships uses, and
+  the standard spacing applies. «سریال لجستیک» also gains the `hash` icon so it looks like its
+  neighbours. No CSS rule was added for the Sidebar, and no other app's CSS was touched.
+
+### Added
+
+- **The app is named «لجستیک پردازش هوشمند» in the desk.** `resolve_sidebar` renders its label as
+  `_(base.title or shell)` (`frappe/desk/doctype/sidebar/sidebar.py:1661`) and the apps screen
+  renders its title as `_(app_detail.get("title"))` (`frappe/apps.py:66`), so one translation row —
+  `SmartProcess Logistics,لجستیک پردازش هوشمند` in `translations/fa.csv` — renames both displays
+  without renaming the app. The app name, module name, DocTypes, routes, fields and package stay in
+  English, a site without Persian keeps the English label, and no record is migrated.
+- **«وابستگی‌ها و تغییرات بین‌ماژولی» is a tab on Logistics Settings.** It lists the apps this app
+  declares (`frappe` and `erpnext` required, `smartprocess_erpnext_accounting` optional) and the
+  changes it applied to the site — Custom Fields, the shipped fixture records, the four roles, the
+  doc events and form scripts, and the stylesheet — with each entry's purpose, configuration,
+  how it is applied (automatic or manual), verification method and removal path. The list is static
+  metadata in `core/interop.py`, joined at read time with facts read from the site by one
+  whitelisted GET (`interop.py`, guarded by `has_permission("Logistics Settings", "read")`). It
+  stores nothing, writes nothing, adds no DocType and no column, and never says a change is
+  applied when the site's own facts do not show it.
+
+### Unchanged
+
+- No schema change, no new DocType, no new Custom Field, no patch, and no change to a document, a
+  ledger, a stock figure, a permission or a role. The navigation entries, reports and workspaces of
+  0.7.2 are unchanged apart from the Section Break attributes above.
+
+### Verified
+
+- `tests/test_stage_d_artifacts.py` holds every Section Break to `indent == 1` and
+  `collapsible == 1`, and holds the Persian module row in `translations/fa.csv`.
+- `tests/test_interop.py` (25 tests) holds the registry to `hooks_composition`, the shipped
+  `custom/*.json` and `fixtures/*.json`, the roles `setup/roles.py` imports, the CSS path in
+  `hooks.py`, and proves the optional app is never imported and the reader never writes.
+- `python -m unittest discover -s smartprocess_logistics/tests -t .` — **1,687 tests, OK**; with
+  the isolated interpreter that has `openpyxl`, 2 skips remain and both are by design.
+
 ## 0.7.2 — 2026-11-16
 
 **The serial pages are one section again.** They were split across three Section Breaks —

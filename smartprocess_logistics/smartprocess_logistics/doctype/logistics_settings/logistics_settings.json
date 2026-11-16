@@ -50,7 +50,10 @@
   "sp_show_quotation_item_stock",
   "sp_show_quotation_warehouse_stock",
   "sp_show_so_item_stock",
-  "sp_show_so_warehouse_stock"
+  "sp_show_so_warehouse_stock",
+  "interop_tab",
+  "interop_section",
+  "interop_registry"
  ],
  "fields": [
   {
@@ -337,11 +340,27 @@
    "fieldname": "sp_show_so_warehouse_stock",
    "fieldtype": "Check",
    "label": "موجودی کالا در فهرست انبارهای سفارش فروش"
+  },
+  {
+   "fieldname": "interop_tab",
+   "fieldtype": "Tab Break",
+   "label": "وابستگی‌ها و تغییرات بین‌ماژولی"
+  },
+  {
+   "description": "این فهرست از فایل‌های همین برنامه ساخته می‌شود و وضعیت هر ردیف از خودِ سایت خوانده می‌شود؛ از این صفحه چیزی تغییر نمی‌کند.",
+   "fieldname": "interop_section",
+   "fieldtype": "Section Break",
+   "label": "وابستگی‌ها و تغییرات"
+  },
+  {
+   "fieldname": "interop_registry",
+   "fieldtype": "HTML",
+   "label": "فهرست وابستگی‌ها و تغییرات"
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-10-30 12:30:00.000000",
+ "modified": "2026-11-16 18:10:00.000000",
  "modified_by": "Administrator",
  "module": "SmartProcess Logistics",
  "name": "Logistics Settings",

@@ -75,6 +75,14 @@ class TestSettingsTranslations(UnitTestCase):
 		)
 		self.assertIn("Warehouse Inventory,موجودی انبار", translations)
 
+	def test_the_module_name_is_shown_in_persian_without_being_renamed(self):
+		# `resolve_sidebar` returns `label=_(base.title or shell)` and the panel header renders that
+		# label, so the display name comes from this file. The document keeps its English name:
+		# the module, the app folder and the desktop icon's `link_to` all point at it.
+		translations = (APP / "translations" / "fa.csv").read_text(encoding="utf-8")
+
+		self.assertIn("SmartProcess Logistics,لجستیک پردازش هوشمند", translations)
+
 
 class TestItemFields(UnitTestCase):
 	def test_the_four_measurement_fields_are_custom_and_non_negative(self):
