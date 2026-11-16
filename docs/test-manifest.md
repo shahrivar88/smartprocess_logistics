@@ -982,3 +982,34 @@ Evidence: `python -m unittest discover -s smartprocess_logistics/tests -t .` —
 12 skipped**. Ten of the twelve skips are XLSX tests that skip when `openpyxl` is absent; run with
 the isolated interpreter that has it (`.../.venv/Scripts/python.exe`), and **1,687 tests pass with
 2 skips** — the missing-library path and the development commitment composition, both by design.
+
+## 0.7.4 — the catalogue v16 actually reads (2026-11-16)
+
+0.7.3 documented the Persian module label as one row in `translations/fa.csv`. That is not how v16
+works: `get_translations_from_mo` (`frappe/gettext/translate.py`) reads only
+`sites/assets/locale/<lang>/LC_MESSAGES/<app>.mo`, and `compile_translations` → `_compile_translation`
+builds it from the `.po` files in the app's `locale/` directory, returning early when no `.po`
+exists. `csv_to_po` does not close the gap either — it fills `msgstr` values into the messages an
+app's POT already holds, and an app without `locale/main.pot` starts from an empty catalogue, so
+each CSV row finds no `msgid` to attach to. `bench migrate` therefore compiled nothing for this app
+and the module kept its English title.
+
+`locale/fa.po` now ships with the app, holding exactly one entry: `SmartProcess Logistics` →
+«لجستیک پردازش هوشمند». `bench build --app smartprocess_logistics` compiles it for every app it
+builds (`frappe/commands/utils.py:109`); a stack that mounts `public/` instead of building runs
+`bench compile-translations --app smartprocess_logistics --locale fa`. The `.mo` is written under
+`sites/assets`, inside the site's volume, so it survives a container recreate.
+
+The catalogue holds one entry deliberately. Compiled catalogues are merged per language across all
+installed apps, so an entry for `Purchase Invoice`, `all` or `physical` would translate that message
+on every screen in that language, not only in this module's. Those rows stay in
+`translations/fa.csv` and remain inert; moving them is a site-wide wording decision, not this fix.
+
+`tests/test_translations.py` (7 tests) parses the PO without a gettext dependency and holds it to:
+exactly one entry; that entry's `msgid` equals the `title` of the shipped `Sidebar`
+(`smartprocess_logistics/sidebar/smartprocess_logistics/smartprocess_logistics.json`); the
+`fa.csv` brand row carries the same Persian string; the file declares `Language: fa` and UTF-8; and
+`locale/` holds no second `.po`.
+
+Evidence: `python -m unittest discover -s smartprocess_logistics/tests -t .` — **1,694 tests, OK,
+12 skipped**; with the isolated interpreter that has `openpyxl`, **1,694 tests pass with 2 skips**.

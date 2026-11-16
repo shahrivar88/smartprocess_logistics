@@ -900,6 +900,18 @@ inlines `doctype_js` into the DocType's own metadata rather than serving it as a
 in v16: `desk/form/meta.py::_add_code`). A bench that installs the app and never builds it is a
 working app with an unstyled window, not a broken one — and one command fixes it.
 
+**The Persian module label needs that build, or one command.** Frappe v16 reads translations from a
+compiled catalogue (`sites/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo`) and never from
+`translations/*.csv`, so the app ships `locale/fa.po`, and `bench build --app smartprocess_logistics`
+compiles it. On a stack that mounts `public/` instead of building, compile the catalogue directly:
+
+```bash
+bench --site <site> compile-translations --app smartprocess_logistics --locale fa
+```
+
+Either way the `.mo` lands in `sites/assets`, inside the site's own volume, so it survives a
+container recreate. A site without it shows the English title; nothing else depends on it.
+
 `deployment/compose.smartprocess-logistics.yaml` is optional site wiring for one Docker stack: it
 mounts `public/` over `assets/smartprocess_logistics`, which is why a stack wired that way needs no
 build step. The application works without it.

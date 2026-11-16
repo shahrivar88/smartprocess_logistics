@@ -5,6 +5,51 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.4 — 2026-11-16
+
+**The Persian module label actually reaches the desk: the app now ships the compiled catalogue
+Frappe v16 reads, not only the CSV it stopped reading.**
+
+### Fixed
+
+- **0.7.3 shipped a translation that v16 never compiled.** The claim in 0.7.3 that one
+  `translations/fa.csv` row renames the module was wrong for this version. In v16 the Desk reads
+  translations from a compiled catalogue only — `get_translations_from_mo`
+  (`frappe/gettext/translate.py`) reads `sites/assets/locale/<lang>/LC_MESSAGES/<app>.mo` — and
+  that catalogue is built from the `.po` files in the app's `locale/` directory:
+  `compile_translations` calls `_compile_translation`, which returns immediately when
+  `get_po_path(app, locale)` does not exist. `csv_to_po` does not rescue a CSV-only app either: it
+  copies `msgstr` values into the messages the app's POT already holds, and an app with no
+  `locale/main.pot` has an empty catalogue, so every row is discarded. `bench migrate` therefore
+  left no `smartprocess_logistics.mo` behind, and the module kept its English title.
+- **The app now ships `smartprocess_logistics/locale/fa.po`**, holding the module label and
+  nothing else: `SmartProcess Logistics` → «لجستیک پردازش هوشمند». `bench build --app
+  smartprocess_logistics` compiles it (`frappe/commands/utils.py:109`), and a stack that mounts
+  `public/` instead of building can run `bench compile-translations --app smartprocess_logistics
+  --locale fa`. The compiled `.mo` lands in `sites/assets/locale/fa/LC_MESSAGES/`, inside the
+  `sites` volume, so it survives a container recreate.
+- **The catalogue holds one entry on purpose.** A compiled catalogue is merged with every other
+  app's catalogue for that language, so an entry for a msgid ERPNext also owns — `Purchase
+  Invoice`, `all`, `physical` — would translate that message on every screen, not only this app's.
+  The other rows `translations/fa.csv` carries stay where they are and remain inert under v16;
+  moving them into a catalogue is a decision about site-wide wording and is not part of this fix.
+
+### Unchanged
+
+- No schema change, no new DocType, no new Custom Field, no patch, no Python or JavaScript change,
+  and no change to a document, a ledger, a stock figure, a permission, a role or the navigation of
+  0.7.3.
+
+### Verified
+
+- `tests/test_translations.py` holds the catalogue to exactly one entry, holds that entry's msgid
+  to the `title` the module sidebar ships, holds the `fa.csv` brand row to the same Persian string,
+  and refuses a second `.po` in `locale/`.
+- `bench --site SmartProcessERP compile-translations --app smartprocess_logistics --locale fa`
+  produced `sites/assets/locale/fa/LC_MESSAGES/smartprocess_logistics.mo`, and
+  `get_translations_from_mo("fa", "smartprocess_logistics")` returns
+  `{"SmartProcess Logistics": "لجستیک پردازش هوشمند"}`.
+
 ## 0.7.3 — 2026-11-16
 
 **The sidebar breathes like the rest of the desk, the app answers to its Persian name, and the

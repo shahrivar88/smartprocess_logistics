@@ -1,0 +1,19 @@
+# The module label, and only the module label.
+#
+# Frappe v16 reads translations from a compiled catalogue
+# (`sites/assets/locale/<lang>/LC_MESSAGES/<app>.mo`) and never from `translations/*.csv`;
+# `bench build --app smartprocess_logistics` and `bench compile-translations` build that
+# catalogue from the `.po` files in this directory. An app whose catalogue carries a msgid
+# shared with ERPNext would translate it for every screen in the language, so this file
+# deliberately holds one entry: the name the Desk shows for this module.
+msgid ""
+msgstr ""
+"Project-Id-Version: smartprocess_logistics\n"
+"Language: fa\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "SmartProcess Logistics"
+msgstr "لجستیک پردازش هوشمند"
