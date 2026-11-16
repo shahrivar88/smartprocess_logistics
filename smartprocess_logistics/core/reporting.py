@@ -7,7 +7,7 @@ modules can be thin and the row arithmetic can be tested without a site.
 
 from smartprocess_logistics.core import fulfilment, inventory, measurements, procurement
 from smartprocess_logistics.core.inventory import ItemStock, max_zero, quantity
-from smartprocess_logistics.warehouse.policy import DEFAULT_VIRTUAL_TYPES, is_virtual_type
+from smartprocess_logistics.warehouse.policy import DEFAULT_VIRTUAL_TYPES, classification_of
 
 
 def _value(row, key, default=None):
@@ -16,8 +16,13 @@ def _value(row, key, default=None):
 	return getattr(row, key, default)
 
 
-def warehouse_inventory_rows(rows, item_details, virtual_types=None):
-	"""One row per Bin snapshot, with Item metadata and physical/virtual classification."""
+def warehouse_inventory_rows(rows, item_details, virtual_types=None, mapping=None):
+	"""One row per Bin snapshot, with Item metadata and its three-way classification.
+
+	The classification is `physical`, `virtual` or `transit` — the stable codes, never a label.
+	`mapping` is the stored classification table, folded in here only so a site that saved one
+	sees it; a site that saved none gets exactly the answer the effective policy gave before.
+	"""
 	virtual_types = virtual_types or DEFAULT_VIRTUAL_TYPES
 	result = []
 
@@ -36,7 +41,7 @@ def warehouse_inventory_rows(rows, item_details, virtual_types=None):
 				"item_group": _value(item, "item_group", "") or "",
 				"warehouse": _value(row, "warehouse", ""),
 				"warehouse_type": warehouse_type or "",
-				"classification": "virtual" if is_virtual_type(warehouse_type, virtual_types) else "physical",
+				"classification": classification_of(warehouse_type, virtual_types, mapping),
 				"actual_qty": quantity(_value(row, "actual_qty", 0)),
 				"stock_uom": _value(row, "stock_uom", "") or _value(item, "stock_uom", "") or "",
 				"stock_value": quantity(_value(row, "stock_value", 0)),

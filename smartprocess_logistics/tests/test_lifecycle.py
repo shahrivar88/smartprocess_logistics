@@ -805,6 +805,7 @@ class HooksRegistrationTest(UnitTestCase):
 				"Stock Entry",
 				"Stock Reservation Entry",
 				"Logistics Serial Assignment",
+				"Logistics Settings",
 			},
 		)
 		self.assertEqual(

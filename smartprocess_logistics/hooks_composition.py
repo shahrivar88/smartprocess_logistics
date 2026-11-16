@@ -34,8 +34,13 @@ def approved_doctype_js():
 		"Purchase Receipt": "public/js/purchase_receipt_measurements.js",
 		# The two buttons that export this app's records and import them back. They live on the
 		# Settings single because that is where an administrator looks for them, and they are the
-		# only supported way to carry the history across a removal.
-		"Logistics Settings": "public/js/logistics_settings_transfer.js",
+		# only supported way to carry the history across a removal. The classification table
+		# follows them: it keeps the grid complete in front of the server's own refusal and
+		# decides no classification itself.
+		"Logistics Settings": [
+			"public/js/logistics_settings_transfer.js",
+			"public/js/logistics_settings_classification.js",
+		],
 		# One Link query for one purpose: in a Material Transfer, the Item Code selector offers
 		# the items that are actually in the row's source warehouse. It replaces the form's own
 		# `get_query` on that field and leaves every other purpose to the standard controller.
@@ -106,5 +111,13 @@ def approved_doc_events():
 		"Logistics Serial Assignment": {
 			"validate": "smartprocess_logistics.serial_link.validate_assignment",
 			"on_trash": "smartprocess_logistics.serial_link.audit_deletion",
+		},
+		# The classification table is a mapping, not a setting of its own: it changes what this
+		# app lets you do with a warehouse and writes no Warehouse. The save is refused unless the
+		# writer may write the single, and the mapping the request cached is dropped afterwards so
+		# the next answer comes from what was saved.
+		"Logistics Settings": {
+			"validate": "smartprocess_logistics.warehouse.classification_settings.validate_logistics_settings",
+			"on_update": "smartprocess_logistics.warehouse.classification_settings.forget_classification_mapping",
 		},
 	}

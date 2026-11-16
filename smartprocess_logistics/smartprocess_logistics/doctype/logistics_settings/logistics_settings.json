@@ -40,6 +40,8 @@
   "sp_virtual_stock_covers_procurement",
   "sp_recommended_purchase_net_of_open_po",
   "sp_inventory_policy_version",
+  "classification_section",
+  "warehouse_classifications",
   "display_section",
   "sp_show_si_item_stock",
   "sp_show_warehouse_stock_in_selector",
@@ -264,6 +266,19 @@
    "label": "نسخهٔ سیاست خرید و موجودی",
    "non_negative": 1,
    "read_only": 1
+  },
+  {
+   "description": "هر نوع انبار را به فیزیکی، مجازی یا در راه نسبت می‌دهد. موجودی انبار مجازی و در راه قابل فروش، ارسال یا رزرو نیست؛ پس تغییر این جدول روی موجودی قابل فروش، ثبت Delivery Note، رزرو موجودی برای سفارش فروش، محاسبهٔ کسری تأمین و اعتبارسنجی Stock Entry اثر می‌گذارد. خودِ Warehouse و نوع انبار آن تغییر نمی‌کند و هیچ موجودی یا سند حسابداری بازنویسی نمی‌شود. تا وقتی جدول خالی است، سیاست پیش‌فرض اعمال می‌شود و رفتار فعلی تغییر نمی‌کند.",
+   "fieldname": "classification_section",
+   "fieldtype": "Section Break",
+   "label": "طبقه‌بندی انواع انبار"
+  },
+  {
+   "description": "برای هر نوع انبار یک ردیف، و ردیفی که ستون «نوع انبار» آن خالی است برای انبارهای بدون نوع. جدول ناقص ذخیره نمی‌شود.",
+   "fieldname": "warehouse_classifications",
+   "fieldtype": "Table",
+   "label": "طبقه‌بندی انواع انبار",
+   "options": "Logistics Warehouse Classification"
   },
   {
    "fieldname": "display_section",

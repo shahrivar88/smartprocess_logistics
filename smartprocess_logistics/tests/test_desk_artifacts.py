@@ -89,7 +89,7 @@ class TestWorkspaceSidebar(UnitTestCase):
 
 		self.assertEqual(len(carrying), 2, f"expected the two workspace sidebars, found {carrying}")
 		self.assertEqual(carrying[0][0], "انبار و خرید")
-		self.assertEqual(len(carrying[0][1]), 13)
+		self.assertEqual(len(carrying[0][1]), 14)
 		self.assertEqual(carrying[1][0], "سریال لجستیک")
 		self.assertEqual(len(carrying[1][1]), 6)
 
@@ -140,6 +140,7 @@ class TestWorkspaceSidebar(UnitTestCase):
 			"Warehouse Inventory",
 			"Sales Orders Ready for Invoicing",
 			"Item Weight and Volume",
+			"Purchased Not Received",
 			"تراز موجودی",
 			"Purchase Order",
 			"Purchase Receipt",
@@ -313,6 +314,7 @@ class TestWarehouseWorkspace(TestWorkspace):
 				"Warehouse Inventory",
 				"Sales Orders Ready for Invoicing",
 				"Item Weight and Volume",
+				"Purchased Not Received",
 				"تراز موجودی",
 			},
 		)

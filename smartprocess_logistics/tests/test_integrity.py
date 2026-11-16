@@ -570,6 +570,7 @@ class TestHooksAreRegisteredAndSafe(UnitTestCase):
 				"Stock Entry",
 				"Stock Reservation Entry",
 				"Logistics Serial Assignment",
+				"Logistics Settings",
 			},
 		)
 		self.assertEqual(
@@ -623,6 +624,15 @@ class TestHooksAreRegisteredAndSafe(UnitTestCase):
 			{
 				"validate": "smartprocess_logistics.serial_link.validate_assignment",
 				"on_trash": "smartprocess_logistics.serial_link.audit_deletion",
+			},
+		)
+		# The classification table is checked on save and the cached mapping is dropped after it,
+		# so the next caller reads what was actually saved rather than what the request cached.
+		self.assertEqual(
+			doc_events["Logistics Settings"],
+			{
+				"validate": "smartprocess_logistics.warehouse.classification_settings.validate_logistics_settings",
+				"on_update": "smartprocess_logistics.warehouse.classification_settings.forget_classification_mapping",
 			},
 		)
 

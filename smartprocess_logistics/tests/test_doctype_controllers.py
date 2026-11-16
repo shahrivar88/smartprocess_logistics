@@ -178,6 +178,7 @@ class TestDocTypeControllers(UnitTestCase):
 				"Logistics Serial Transfer",
 				"Logistics Serial Transfer Item",
 				"Logistics Settings",
+				"Logistics Warehouse Classification",
 			],
 		)
 

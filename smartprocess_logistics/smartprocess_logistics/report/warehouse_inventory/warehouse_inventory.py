@@ -1,9 +1,14 @@
-"""Warehouse Inventory report: one row per Item and Warehouse."""
+"""Warehouse Inventory report: one row per Item and Warehouse.
+
+The loader and every calculation speak in the stable codes `physical`, `virtual` and `transit`.
+Only the two lines below turn them into the Persian words a person reads; a code that is not
+mapped is shown unchanged rather than guessed at.
+"""
 
 import frappe
 from frappe import _
 
-from smartprocess_logistics.warehouse import report_data
+from smartprocess_logistics.warehouse import policy, report_data
 
 
 def execute(filters=None):
@@ -11,7 +16,8 @@ def execute(filters=None):
 	company = report_data.require_company(filters)
 	rows = report_data.warehouse_inventory(company, filters)
 	for row in rows:
-		row["classification"] = "مجازی" if row.get("classification") == "virtual" else "فیزیکی"
+		code = row.get("classification")
+		row["classification"] = policy.CLASSIFICATION_LABELS.get(code, code or "")
 	return columns(), rows
 
 

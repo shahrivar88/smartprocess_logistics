@@ -2,10 +2,20 @@
 //
 // Rows are already sorted by shortage, descending. The two "related" columns hold document
 // names separated by ", " and are drawn as links here, because a Link column can only hold one.
+//
+// The company is mandatory, and the default is what lets the report run when it opens: Frappe
+// shows "Please set filters" instead of loading a report whose mandatory filter is empty.
 
 frappe.query_reports["تراز موجودی"] = {
 	filters: [
-		{ fieldname: "company", label: __("شرکت"), fieldtype: "Link", options: "Company", reqd: 1 },
+		{
+			fieldname: "company",
+			label: __("شرکت"),
+			fieldtype: "Link",
+			options: "Company",
+			reqd: 1,
+			default: frappe.defaults.get_user_default("Company"),
+		},
 		{ fieldname: "item", label: __("کالا"), fieldtype: "Link", options: "Item" },
 		{ fieldname: "item_group", label: __("گروه کالا"), fieldtype: "Link", options: "Item Group" },
 		{ fieldname: "warehouse", label: __("انبار"), fieldtype: "Link", options: "Warehouse" },

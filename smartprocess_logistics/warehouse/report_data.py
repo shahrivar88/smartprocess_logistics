@@ -20,9 +20,10 @@ from smartprocess_logistics.core import (
 	measurement_totals,
 	measurements,
 	procurement,
+	receipts,
 	reporting,
 )
-from smartprocess_logistics.warehouse import classification, measurement_summary, policies
+from smartprocess_logistics.warehouse import classification, measurement_summary, policies, policy
 
 ITEM_READ = "Item"
 WAREHOUSE = "Warehouse"
@@ -30,6 +31,10 @@ SALES_ORDER = "Sales Order"
 QUOTATION = "Quotation"
 PURCHASE_ORDER = "Purchase Order"
 SALES_INVOICE = "Sales Invoice"
+PURCHASE_INVOICE = "Purchase Invoice"
+PURCHASE_INVOICE_ITEM = "Purchase Invoice Item"
+PURCHASE_RECEIPT = "Purchase Receipt"
+PURCHASE_RECEIPT_ITEM = "Purchase Receipt Item"
 
 # A report is a screen, not an export job. Reading one extra row lets the loader refuse a
 # result that exceeded the bound instead of silently showing a truncated report.
@@ -168,14 +173,40 @@ def _warehouse_stock(company, warehouses):
 	)
 
 
+def _classification_filter(filters):
+	"""The «نوع انبار» filter, refused by name when the value is not one the form offers."""
+	selected = str((filters or {}).get("classification") or policy.FILTER_ALL).strip()
+
+	if selected not in policy.TYPE_FILTERS:
+		frappe.throw(
+			"نوع انبار انتخابی شناخته نشده است؛ همه، فیزیکی، مجازی، در راه یا تعیین‌نشده.",
+			title="گزارش موجودی انبار",
+		)
+
+	return selected
+
+
 def warehouse_inventory(company, filters):
 	"""Rows for the Warehouse Inventory report."""
-	warehouses = _warehouses(company, filters)
+	selected = _classification_filter(filters)
+	warehouses = [
+		row
+		for row in _warehouses(company, filters)
+		if policy.type_filter_matches(
+			row.get("warehouse_type"),
+			selected,
+			virtual_types=classification.virtual_types(),
+			mapping=classification.stored_mapping(),
+		)
+	]
 	bins, _rows, _stock = _warehouse_stock(company, warehouses)
 	item_codes = {row.get("item_code") for row in bins if row.get("item_code")}
 	items = _item_details(item_codes)
 	rows = reporting.warehouse_inventory_rows(
-		bins, items, virtual_types=classification.virtual_types()
+		bins,
+		items,
+		virtual_types=classification.virtual_types(),
+		mapping=classification.stored_mapping(),
 	)
 	item_filter = (filters or {}).get("item")
 	group_filter = (filters or {}).get("item_group")
@@ -977,3 +1008,297 @@ def weight_volume_rows(company, filters):
 		target_uom=target_uom,
 		extra_warnings=filter_note,
 	)
+
+
+def _receipt_statuses(filters):
+	"""The statuses the receipt-status filter keeps. An unset filter means outstanding."""
+	value = str((filters or {}).get("receipt_status") or receipts.FILTER_OUTSTANDING).strip()
+	statuses = receipts.STATUS_FILTERS.get(value)
+	if statuses is None:
+		frappe.throw(
+			"وضعیت دریافت انتخاب‌شده شناخته نشده است.",
+			frappe.ValidationError,
+			title="گزارش کالاهای خریداری‌شده و دریافت‌نشده",
+		)
+
+	return statuses
+
+
+def _purchase_invoice_filters(company, filters):
+	"""Submitted invoices of the selected company inside the selected window."""
+	condition = {"company": company, "docstatus": 1, **_date_filters(filters, "posting_date")}
+	if filters.get("supplier"):
+		condition["supplier"] = filters.get("supplier")
+	if filters.get("purchase_invoice"):
+		condition["name"] = filters.get("purchase_invoice")
+
+	return condition
+
+
+def _receipt_warehouses(item, linked):
+	"""Where this line went: the invoice row's warehouse and every submitted receipt's.
+
+	An invoice that set Update Stock names its warehouse on its own row; one that did not
+	usually names none, and the warehouse exists only on the receipt rows.
+	"""
+	names = []
+	candidates = [item.get("warehouse")]
+	candidates.extend(row.get("warehouse") for row in linked if row.get("docstatus") == 1)
+	for name in candidates:
+		if name and name not in names:
+			names.append(name)
+
+	return names
+
+
+def _warehouse_types(company, names):
+	"""`Warehouse Type` per named warehouse, for the three-way classification.
+
+	A warehouse missing from the result is one this user may not read, one of another company,
+	or one that no longer exists; the caller reads that as "cannot be classified", never as
+	physical.
+	"""
+	if not names:
+		return {}
+	_require_read(WAREHOUSE, "برای اجرای این گزارش، دسترسی خواندن انبار لازم است.")
+
+	rows = _bounded(
+		frappe.get_list(
+			WAREHOUSE,
+			filters={"company": company, "name": ("in", tuple(sorted(names)))},
+			fields=["name", "warehouse_type"],
+			limit_page_length=MAX_REPORT_ROWS + 1,
+		),
+		"انبار",
+	)
+	return {row.get("name"): row.get("warehouse_type") for row in rows}
+
+
+def _classification_of(warehouse, types):
+	if not warehouse or warehouse not in types:
+		return None
+
+	return classification.classification_of_type(types[warehouse])
+
+
+def _permitted_receipts(company, names):
+	"""Receipt headers this user may read in this company, cancelled and draft ones included.
+
+	They are kept so the report can say a cancelled or a draft receipt exists instead of
+	silently leaving it out of the sums.
+	"""
+	if not names:
+		return {}
+
+	rows = _bounded(
+		frappe.get_list(
+			PURCHASE_RECEIPT,
+			filters={"company": company, "name": ("in", tuple(sorted(names)))},
+			fields=["name", "is_return"],
+			limit_page_length=MAX_REPORT_ROWS + 1,
+		),
+		"رسید خرید",
+	)
+	return {row.get("name"): row for row in rows}
+
+
+def _receipt_rows(company, items):
+	"""Every Purchase Receipt Item linked to these invoice items, keyed by the invoice row."""
+	invoice_items = tuple(sorted({row.get("name") for row in items if row.get("name")}))
+	receipt_items = tuple(sorted({row.get("pr_detail") for row in items if row.get("pr_detail")}))
+	if not invoice_items and not receipt_items:
+		return {}
+
+	_require_read(PURCHASE_RECEIPT, "برای اجرای این گزارش، دسترسی خواندن رسید خرید لازم است.")
+
+	# Both directions are read because ERPNext fills them at different moments: an invoice that
+	# came first carries `pr_detail` once a receipt is made from it, and a receipt that came
+	# first carries `purchase_invoice_item` once the invoice is made from it.
+	conditions = []
+	if invoice_items:
+		conditions.append({"purchase_invoice_item": ("in", invoice_items)})
+	if receipt_items:
+		conditions.append({"name": ("in", receipt_items)})
+
+	found = {}
+	for condition in conditions:
+		rows = _bounded(
+			frappe.get_all(
+				PURCHASE_RECEIPT_ITEM,
+				filters=condition,
+				fields=[
+					"name",
+					"parent",
+					"purchase_invoice_item",
+					"qty",
+					"rejected_qty",
+					"received_qty",
+					"uom",
+					"conversion_factor",
+					"warehouse",
+					"docstatus",
+				],
+				limit_page_length=MAX_REPORT_ROWS + 1,
+			),
+			"ردیف رسید خرید",
+		)
+		for row in rows:
+			found.setdefault(row.get("name"), row)
+
+	parents = _permitted_receipts(company, {row.get("parent") for row in found.values() if row.get("parent")})
+	from_detail = {row.get("pr_detail"): row.get("name") for row in items if row.get("pr_detail")}
+
+	by_invoice_item = {}
+	for row in found.values():
+		parent = parents.get(row.get("parent"))
+		if parent is None:
+			continue
+
+		row["is_return"] = bool(parent.get("is_return"))
+		key = row.get("purchase_invoice_item") or from_detail.get(row.get("name"))
+		by_invoice_item.setdefault(key, []).append(row)
+
+	return by_invoice_item
+
+
+def _receipt_report_row(company, item, parent, linked, types, statuses):
+	"""One report row for one invoice item, or None when the receipt filter excludes it."""
+	update_stock = bool(parent.get("update_stock"))
+	receipt_rows = []
+	cancelled = 0
+	draft = 0
+
+	for row in linked:
+		if row.get("docstatus") == 2:
+			cancelled += 1
+			continue
+		if row.get("docstatus") == 0:
+			draft += 1
+			continue
+
+		receipt_rows.append(
+			receipts.ReceiptRow(
+				qty=row.get("qty"),
+				rejected_qty=row.get("rejected_qty"),
+				received_qty=row.get("received_qty"),
+				uom=row.get("uom"),
+				conversion_factor=row.get("conversion_factor"),
+				classification=_classification_of(row.get("warehouse"), types),
+				is_return=bool(row.get("is_return")),
+			)
+		)
+
+	outcome = receipts.evaluate(
+		receipts.InvoiceRow(
+			purchased_qty=item.get("qty"),
+			received_qty=item.get("received_qty"),
+			uom=item.get("uom"),
+			conversion_factor=item.get("conversion_factor"),
+			is_return=bool(parent.get("is_return")),
+			update_stock=update_stock,
+			warehouse_classification=_classification_of(item.get("warehouse"), types)
+			if update_stock
+			else None,
+			receipts=tuple(receipt_rows),
+			cancelled_receipts=cancelled,
+			draft_receipts=draft,
+		)
+	)
+	if outcome.status not in statuses:
+		return None
+
+	return {
+		"company": company,
+		"purchase_invoice": parent.get("name"),
+		"posting_date": parent.get("posting_date"),
+		"supplier": parent.get("supplier"),
+		"item_code": item.get("item_code"),
+		"item_name": item.get("item_name") or "",
+		"purchased_qty": outcome.purchased,
+		"received_qty": outcome.received,
+		"outstanding_qty": outcome.outstanding,
+		"uom": item.get("uom") or "",
+		"warehouse": "، ".join(_receipt_warehouses(item, linked)),
+		"currency": parent.get("currency") or "",
+		"receipt_status": outcome.status,
+		"physical_qty": outcome.physical,
+		"note_codes": list(outcome.notes),
+	}
+
+
+def purchased_not_received(company, filters):
+	"""Rows for the Purchased Not Received report: one per submitted Purchase Invoice Item.
+
+	The received quantity is ERPNext's own `Purchase Invoice Item.received_qty`, so the report
+	agrees with the document's status; the outstanding quantity is the difference. Nothing is
+	derived from `Bin`: which invoice row a unit settled is a document fact, not a balance.
+	"""
+	filters = filters or {}
+	statuses = _receipt_statuses(filters)
+	_require_read(PURCHASE_INVOICE, "برای اجرای این گزارش، دسترسی خواندن فاکتور خرید لازم است.")
+
+	headers = _bounded(
+		frappe.get_list(
+			PURCHASE_INVOICE,
+			filters=_purchase_invoice_filters(company, filters),
+			fields=["name", "posting_date", "supplier", "currency", "is_return", "update_stock"],
+			order_by="posting_date asc, name asc",
+			limit_page_length=MAX_REPORT_ROWS + 1,
+		),
+		"فاکتور خرید",
+	)
+	parents = {row.get("name"): row for row in headers}
+	if not parents:
+		return []
+
+	item_filters = {"parent": ("in", tuple(parents)), "docstatus": 1}
+	if filters.get("item"):
+		item_filters["item_code"] = filters.get("item")
+
+	items = _bounded(
+		frappe.get_all(
+			PURCHASE_INVOICE_ITEM,
+			filters=item_filters,
+			fields=[
+				"name",
+				"parent",
+				"idx",
+				"item_code",
+				"item_name",
+				"qty",
+				"received_qty",
+				"uom",
+				"conversion_factor",
+				"warehouse",
+				"pr_detail",
+			],
+			order_by="parent asc, idx asc",
+			limit_page_length=MAX_REPORT_ROWS + 1,
+		),
+		"ردیف فاکتور خرید",
+	)
+	if not items:
+		return []
+
+	linked = _receipt_rows(company, items)
+	classification_warehouses = set()
+	for item in items:
+		classification_warehouses.update(_receipt_warehouses(item, linked.get(item.get("name"), ())))
+	types = _warehouse_types(company, classification_warehouses)
+
+	warehouse_filter = filters.get("warehouse")
+	result = []
+	for item in items:
+		parent = parents.get(item.get("parent"))
+		if parent is None:
+			continue
+		if warehouse_filter and warehouse_filter not in _receipt_warehouses(
+			item, linked.get(item.get("name"), ())
+		):
+			continue
+
+		row = _receipt_report_row(company, item, parent, linked.get(item.get("name"), ()), types, statuses)
+		if row is not None:
+			result.append(row)
+
+	return result

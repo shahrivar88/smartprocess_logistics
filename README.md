@@ -8,6 +8,15 @@ per Item and is **independent of ERPNext's own stock serial numbers**: the app d
 on `Item.has_serial_no`, does not create or edit `Serial No` or `Serial and Batch Bundle`
 records, and never posts stock or accounting entries.
 
+## Release 0.7.0
+
+Version 0.7.0 reconciles the phase-2 functionality onto the 0.6.0 application: the
+«کالاهای خریداری‌شده و دریافت‌نشده» report, the warehouse-classification settings table with the
+stable `physical` / `virtual` / `transit` codes, and a permitted default company on the three
+operational reports so they load when opened. Both Logistics workspaces, every 0.6.0 report and
+every existing guard are preserved. The database-free suite passes: 1653 tests, 2 skipped in the
+interpreter that carries `openpyxl`. See `CHANGELOG.md` for scope and known limitations.
+
 ## Release 0.6.0
 
 Version 0.6.0 is the GitHub publication of the approved tree at `f50e761`. The application
@@ -29,8 +38,8 @@ query per row.
 | Sales Serial Register | one row per serial assignment | which serial was sold on which invoice, and when it was registered | `core.reports.build_register_query` only; no Report document ships, so it is reachable from a future report or a console and from nowhere else |
 | Missing Sales Serials | one row per serial-required invoice item row | which rows still need serials, and how many | ships, as a Script Report with Persian columns and Persian filters |
 
-The app ships seven Logistics reports. «تراز موجودی» is the primary operational report; the
-other six remain available:
+The app ships eight Logistics reports. «تراز موجودی» is the primary operational report; the
+other seven remain available:
 
 - **«تراز موجودی»** — physical, Transit and Virtual stock are shown separately. Only physical
   and Transit count toward operational shortage, so Virtual stock never hides a shortage.
@@ -39,6 +48,9 @@ other six remain available:
 - `Sales Orders Ready for Invoicing`
 - `Procurement Shortage`
 - `Item Weight and Volume`
+- «کالاهای خریداری‌شده و دریافت‌نشده» (`Purchased Not Received`) — one row per submitted Purchase
+  Invoice item line, with the physical quantity that reached a sellable warehouse beside the
+  accounting receipt, so partial, returned, cancelled and transit-only receipts stay distinguishable
 
 Every value a caller supplies becomes a named parameter. An `IN` list is expanded into one
 placeholder per value rather than relying on a driver to expand a tuple, so nothing depends on
@@ -77,6 +89,12 @@ Verified on `SmartProcessERP` (Frappe v16, ERPNext 16.35.0, port 8080) by the da
 and the integration proofs in `docs/test-manifest.md`. See `CHANGELOG.md` for the exact scope,
 known limitations, and future Persian/Jalali filtering work. The existing `v0.5.0` tag remains
 unchanged.
+
+**0.7.0 — 2026-11-16.** Reconciliation of the phase-2 tree: the Purchased Not Received report,
+warehouse classification with stable `physical` / `virtual` / `transit` codes and Persian display
+labels, and default-company auto-load on «تراز موجودی», `Warehouse Inventory` and `Purchased Not
+Received`; the workspace card and the sidebar report section list the new report. The database-free
+suite passes: 1653 tests, 2 skipped with `openpyxl`. `main` is untouched.
 
 **0.6.0 — 2026-11-15.** GitHub publication of the approved tree: «تراز موجودی» as the primary
 operational report, Physical/Transit stock separated with Virtual excluded from availability and

@@ -526,6 +526,7 @@ class TestWorkspaceAndHooks(UnitTestCase):
 				"Warehouse Inventory",
 				"Sales Orders Ready for Invoicing",
 				"Item Weight and Volume",
+				"Purchased Not Received",
 				OPERATIONAL_REPORT,
 			},
 		)

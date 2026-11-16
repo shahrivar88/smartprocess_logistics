@@ -58,6 +58,18 @@
    "icon": "file-text",
    "indent": 1,
    "keep_closed": 0,
+   "label": "کالاهای خریداری‌شده و دریافت‌نشده",
+   "link_to": "Purchased Not Received",
+   "link_type": "Report",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "file-text",
+   "indent": 1,
+   "keep_closed": 0,
    "label": "سفارش‌های آمادهٔ فاکتور",
    "link_to": "Sales Orders Ready for Invoicing",
    "link_type": "Report",

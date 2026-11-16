@@ -5,6 +5,46 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 — 2026-11-16
+
+**Reconciliation of the phase-2 tree onto the published 0.6.0 application.** This release adds the
+Purchased Not Received report and the warehouse-classification settings table, and makes the three
+operational reports select the user's permitted default company so they load when opened. It keeps
+every 0.6.0 capability: the serial app, «تراز موجودی», the authorized-stock selectors, the Purchase
+Invoice cancel guard, the measurement panels, the fixtures and both Logistics workspaces. The
+Commitment work remains deferred and excluded.
+
+### Added
+
+- **«کالاهای خریداری‌شده و دریافت‌نشده» (`Purchased Not Received`).** One row per submitted Purchase
+  Invoice item line, with the accounting receipt ERPNext recorded beside the quantity that reached
+  a sellable warehouse. Partial receipts, purchase returns, cancellations, transit transfers and
+  unmatched receipt rows keep their own meaning: a line received only into a Transit or Virtual
+  warehouse is received and not arrived, and an undeterminable physical quantity is reported as
+  such rather than as zero.
+- **Warehouse classification settings.** A `Logistics Settings` table lists every `Warehouse Type`
+  on the site plus the «بدون نوع انبار» bucket and stores one of three stable codes — `physical`,
+  `virtual`, `transit` — per type. Persian is a display label only. An empty table preserves the
+  effective policy exactly, so an unconfigured site behaves as it did in 0.6.0; `Transit` remains
+  non-deliverable by default.
+- **`Logistics Warehouse Classification`** child DocType, its controller and its whitelisted
+  settings reader, with write permission re-checked server-side.
+
+### Changed
+
+- The three operational reports — «تراز موجودی», `Warehouse Inventory` and `Purchased Not Received`
+  — default their mandatory company filter to `frappe.defaults.get_user_default("Company")`, so a
+  user with a permitted default company sees results on open instead of "Please set filters".
+  Server-side company and report permission checks are unchanged.
+- The «انبار و خرید» Workspace card «گزارش‌ها» lists the new report, and the Workspace Sidebar's
+  collapsible «گزارش‌ها» section links it too. Both Logistics workspaces, their routes, their
+  operational shortcuts and their role permissions are preserved.
+
+### Verified
+
+- Database-free suite: **1653 tests, OK, 2 skipped** in the interpreter that carries `openpyxl`
+  (12 skipped in the system interpreter, which does not).
+
 ## 0.6.0 — 2026-11-15
 
 **GitHub publication of the approved tree at `f50e761`.** The application source is the tree
