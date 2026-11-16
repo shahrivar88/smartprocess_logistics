@@ -8,14 +8,15 @@
   {
    "added": 0,
    "hidden": 0,
-   "icon": "stock",
+   "icon": "container",
    "link_to": "SmartProcess Logistics",
    "link_type": "Sidebar",
-   "title": "لجستیک"
+   "title": "SmartProcess Logistics"
   }
  ],
- "modified": "2026-10-30 14:10:00.000000",
+ "modified": "2026-11-17 02:45:00.000000",
  "modified_by": "Administrator",
+ "mount_on": "erpnext",
  "name": "smartprocess_logistics",
  "owner": "Administrator",
  "standard": 1,

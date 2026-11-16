@@ -5,6 +5,43 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.7 — 2026-11-17
+
+**The Logistics tile now sits in the ERPNext rail beside Accounting, Buying, Selling and Stock,
+and its cube is a cargo container.**
+
+### Fixed
+
+- **The tile never reached the ERPNext rail.** The v16 rail is per app:
+  `dock.js` draws `collect_dock_entries(get_sidebar_app())`, and `get_sidebar_app()` resolves
+  `module_sidebars[current_module].app` through `boot.app_rail_host`. Without a mount this app
+  kept a rail of its own, so its tile appeared only after the user was already inside that
+  shell. The record now carries `mount_on: "erpnext"`: `Dock.mounted_apps` appends its rows to
+  the `erpnext` base, the app drops out of `docked_apps()`, and `boot` reports
+  `on_apps_screen: False` — the companion route India Compliance takes onto ERPNext. `modified`
+  moved with the change, because a standard record the site already holds is only re-imported
+  when the shipped file is newer.
+- **The tile's tooltip was the untranslated Persian string.** `rail_entry` passes the row
+  `title` through `_()`, so a Persian title there is a msgid nothing translates. The row now
+  carries the msgid `SmartProcess Logistics`, which `locale/fa.po` already renders as
+  «لجستیک پردازش هوشمند».
+- **The icon was a plain cube (`stock`).** It is now `container`, the lucide cargo container.
+  Every standard tile draws a `-soft` id from its own app's `module-icons.svg`, and none of
+  those sprites carries a package, vehicle or warehouse shape, so the closest native logistics
+  glyph comes from the lucide sprite `app_include_icons` already preloads on every desk page.
+  It is drawn on the same 24 grid with the same 1.5 stroke and inherits the tile's hover and
+  active colour, and no other Dock icon is touched.
+
+### Added
+
+- Three tests in `TestAppsScreenEntry`: the mount, the translated title msgid, and the icon.
+
+### Unchanged
+
+- No DocType, schema, patch, permission or Python runtime behaviour. The `SmartProcess
+  Logistics` Sidebar keeps its 27 items and 5 sections, and `locale/fa.po` and its compiled
+  form are not edited.
+
 ## 0.7.6 — 2026-11-16
 
 **The app is now installable from GitHub on another ERPNext system, and the install command in

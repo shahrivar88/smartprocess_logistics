@@ -448,6 +448,33 @@ class TestAppsScreenEntry(UnitTestCase):
 			("Sidebar", "SmartProcess Logistics"),
 		)
 
+	def test_the_dock_mounts_on_the_erpnext_rail(self):
+		# The rail is per app: `dock.js` draws `collect_dock_entries(get_sidebar_app())`, so a
+		# row is only ever beside Accounts, Selling, Buying and Stock when this app mounts there
+		# (`mounted_apps` in `desk/doctype/dock/dock.py`) instead of keeping a rail of its own.
+		path = APP / "dock" / "smartprocess_logistics" / "smartprocess_logistics.json"
+		doc = read_json(path)
+
+		self.assertEqual(doc.get("mount_on"), "erpnext")
+
+	def test_the_dock_title_is_the_translated_msgid(self):
+		# The rail draws no label; the tile's tooltip is `_(title)`, so the title has to be the
+		# msgid `locale/fa.po` already carries, not the Persian text it translates to.
+		path = APP / "dock" / "smartprocess_logistics" / "smartprocess_logistics.json"
+		doc = read_json(path)
+
+		self.assertEqual(doc["items"][0]["title"], "SmartProcess Logistics")
+
+	def test_the_dock_icon_is_one_the_shell_already_preloads(self):
+		# Every standard rail tile draws a `-soft` id from its own app's `module-icons.svg`, and
+		# no logistics glyph exists in any of them. `container` is a lucide id from the sprite
+		# Frappe preloads for every desk page, on the same 24 grid and the same 1.5 stroke, so it
+		# needs no asset of ours and follows the tile's hover and active colour.
+		path = APP / "dock" / "smartprocess_logistics" / "smartprocess_logistics.json"
+		doc = read_json(path)
+
+		self.assertEqual(doc["items"][0]["icon"], "container")
+
 
 class TestTheAppLevelFilesAreNamedAfterTheirDocuments(UnitTestCase):
 	"""The file name is the only thing `migrate` uses to tell a shipped artefact from an orphan.

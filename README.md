@@ -743,6 +743,19 @@ The v16 app entry is `dock/smartprocess_logistics/`, the standard Dock record, t
 for sites that still render the legacy icon grid, and links the «انبار و خرید» Workspace
 Sidebar. The `SmartProcess Logistics` Sidebar shown with that workspace is also part of the app.
 
+The Dock record carries `mount_on: "erpnext"`, and that field decides whether the tile can be
+seen at all. The v16 rail is per app: `dock.js` draws `collect_dock_entries(get_sidebar_app())`,
+and `get_sidebar_app()` resolves `module_sidebars[current_module].app` through
+`boot.app_rail_host`. An app without a mount keeps a rail of its own, so its tile appears only
+after the user is already inside that shell. With the mount, `Dock.mounted_apps` appends this
+app's rows to the `erpnext` base, drops the app from `docked_apps()` and reports
+`on_apps_screen: False` — the companion route India Compliance takes onto ERPNext. The row's
+`title` is an English msgid because `rail_entry` passes it through `_()`, and `locale/fa.po`
+supplies «لجستیک پردازش هوشمند». The tile's `icon` is `container`: every standard tile draws a
+`-soft` id from its own app's `module-icons.svg`, and none of those sprites carries a package,
+vehicle or warehouse shape, so the record uses the lucide cargo container from the sprite
+`app_include_icons` already preloads — same 24 grid, same 1.5 stroke, and the tile's own colour.
+
 The module panel v16 actually renders comes from
 `smartprocess_logistics/sidebar/smartprocess_logistics/smartprocess_logistics.json` — a standard
 `Sidebar` named exactly as the module, which `boot.get_module_sidebars` resolves and ships in the
