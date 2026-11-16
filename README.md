@@ -8,6 +8,15 @@ per Item and is **independent of ERPNext's own stock serial numbers**: the app d
 on `Item.has_serial_no`, does not create or edit `Serial No` or `Serial and Batch Bundle`
 records, and never posts stock or accounting entries.
 
+## Release 0.7.1
+
+Version 0.7.1 fixes the module sidebar of the Desk panel. Frappe 16 nests a link under the
+Section Break above it only when the link carries `child: 1`, and this app's sidebar marked none
+of them, so «گزارش‌ها», «خرید», «انبار» and «فروش» rendered nothing. All eight reports are now
+grouped under an expandable «گزارش‌ها», the operational shortcuts and «تنظیمات سریال» stay outside
+that group, and no route, title or permission changes. The database-free suite passes: 1659
+tests, 2 skipped in the interpreter that carries `openpyxl`. See `CHANGELOG.md`.
+
 ## Release 0.7.0
 
 Version 0.7.0 reconciles the phase-2 functionality onto the 0.6.0 application: the
@@ -89,6 +98,13 @@ Verified on `SmartProcessERP` (Frappe v16, ERPNext 16.35.0, port 8080) by the da
 and the integration proofs in `docs/test-manifest.md`. See `CHANGELOG.md` for the exact scope,
 known limitations, and future Persian/Jalali filtering work. The existing `v0.5.0` tag remains
 unchanged.
+
+**0.7.1 — 2026-11-16.** The module sidebar nests its links in their Section Breaks, so the v16
+Desk panel renders «گزارش‌ها» with all eight reports, «خرید», «انبار», «فروش», «سریال‌ها» and
+«تنظیمات»; «کسری سریال فروش» moved into «گزارش‌ها», and `Inventory and Procurement Dashboard` and
+`Procurement Shortage` became reachable from the panel. Routes, titles, permissions, both
+Workspaces and every operational rule are unchanged. The database-free suite passes: 1659 tests,
+2 skipped with `openpyxl`. `main` is untouched.
 
 **0.7.0 — 2026-11-16.** Reconciliation of the phase-2 tree: the Purchased Not Received report,
 warehouse classification with stable `physical` / `virtual` / `transit` codes and Persian display
@@ -726,6 +742,18 @@ The v16 app entry is `dock/smartprocess_logistics/`, the standard Dock record, t
 `add_to_apps_screen` in `hooks.py`. `desktop_icon/لجستیک.json` remains as a compatibility entry
 for sites that still render the legacy icon grid, and links the «انبار و خرید» Workspace
 Sidebar. The `SmartProcess Logistics` Sidebar shown with that workspace is also part of the app.
+
+The module panel v16 actually renders comes from
+`smartprocess_logistics/sidebar/smartprocess_logistics/smartprocess_logistics.json` — a standard
+`Sidebar` named exactly as the module, which `boot.get_module_sidebars` resolves and ships in the
+boot payload. Its rows are flat in the database; the browser nests them, following each link's
+`child` flag (`sidebar.js nest_section_items`), and a Section Break with no nested link returns
+before drawing anything (`sidebar_item.js TypeSectionBreak.make`). So **a link below a Section
+Break must carry `child: 1`** — at `child: 0` it disappears from the panel with no error, which is
+what hid «گزارش‌ها», «خرید», «انبار» and «فروش» between 0.7.0 and 0.7.1. All eight Logistics
+reports now sit under the collapsible «گزارش‌ها», and «انبار و خرید», «سریال لجستیک» and
+«تنظیمات سریال» stay outside it. `TestModuleSidebar` in `tests/test_desk_artifacts.py` holds both
+rules.
 
 ## Approved scope
 

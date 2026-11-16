@@ -5,6 +5,43 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.1 — 2026-11-16
+
+**The module sidebar renders its sections again.** In Frappe 16 the Desk module panel nests a
+link under the Section Break above it only when the link carries `child: 1`; a link left at
+`child: 0` is dropped without an error, and a Section Break with no nested link draws nothing at
+all. Every link in this app's module sidebar was written that way, so «گزارش‌ها», «خرید»,
+«انبار» and «فروش» were invisible on the live site while the serial sections — the only rows
+carrying `child: 1` — rendered normally. The links still reachable through the Workspaces and the
+workspace sidebars hid the omission.
+
+### Fixed
+
+- **The «گزارش‌ها» section of the module sidebar is a real, expandable group.** All eight Logistics
+  reports sit under it as `child: 1` links: «تراز موجودی», `Warehouse Inventory`, `Inventory and
+  Procurement Dashboard`, `Procurement Shortage`, «کالاهای خریداری‌شده و دریافت‌نشده»,
+  `Sales Orders Ready for Invoicing`, `Item Weight and Volume` and «کسری سریال فروش».
+- **«کسری سریال فروش» is grouped with the other reports.** It was listed under «سریال لجستیک»
+  and is now under «گزارش‌ها», with its label, route and permission unchanged.
+- **Two reports are reachable from the module panel for the first time.** `Inventory and
+  Procurement Dashboard` and `Procurement Shortage` shipped and were documented but appeared in no
+  module sidebar and no Workspace.
+- **«خرید», «انبار», «سریال‌ها» and «تنظیمات» render their links.** Each row under a Section Break
+  is nested in it, so no section is left empty.
+
+### Unchanged
+
+- Report routes, titles, roles and permissions; both Workspaces and their «گزارش‌ها» cards; the two
+  legacy workspace sidebars; «انبار و خرید», «سریال لجستیک» and «تنظیمات سریال» remain outside the
+  reports section. Warehouse classification, inventory figures, accounting, serial rules and
+  measurement snapshots are not touched.
+
+### Verified
+
+- Database-free suite: **1659 tests, OK, 2 skipped** in the interpreter that carries `openpyxl`
+  (12 skipped in the system interpreter, which does not). Six new tests read the module sidebar
+  and fail against the 0.7.0 file.
+
 ## 0.7.0 — 2026-11-16
 
 **Reconciliation of the phase-2 tree onto the published 0.6.0 application.** This release adds the

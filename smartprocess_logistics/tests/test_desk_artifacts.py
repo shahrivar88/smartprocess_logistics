@@ -46,6 +46,7 @@ SIDEBAR_DIR = APP / "workspace_sidebar"
 ICON_DIR = APP / "desktop_icon"
 WORKSPACE_DIR = MODULE / "workspace"
 REPORT_DIR = MODULE / "report"
+V16_SIDEBAR_DIR = MODULE / "sidebar"
 
 
 def read_json(path):
@@ -160,6 +161,172 @@ class TestWorkspaceSidebar(UnitTestCase):
 		}
 
 		self.assertEqual(found, expected)
+
+
+def module_sidebar_files():
+	return sorted(V16_SIDEBAR_DIR.glob("*/*.json"))
+
+
+def module_sidebar():
+	"""The one v16 `Sidebar` this app ships, found by the name `boot` looks it up with."""
+	found = [
+		(path, doc)
+		for path, doc in ((path, read_json(path)) for path in module_sidebar_files())
+		if doc.get("name") == module_name()
+	]
+
+	if len(found) != 1:
+		raise AssertionError(f"expected one sidebar named after the module, found {len(found)}")
+
+	return found[0]
+
+
+def is_section(item):
+	return item.get("type") == "Section Break"
+
+
+def section_indexes(items):
+	return [index for index, item in enumerate(items) if is_section(item)]
+
+
+def section_children(items, index):
+	"""The items a Section Break owns: everything after it, up to the next one."""
+	children = []
+	for item in items[index + 1 :]:
+		if is_section(item):
+			break
+		children.append(item)
+
+	return children
+
+
+def shipped_reports():
+	names = set()
+	for path in sorted(REPORT_DIR.glob("*/*.json")):
+		doc = read_json(path)
+		if doc.get("is_standard") == "Yes" and not doc.get("disabled"):
+			names.add(doc["report_name"])
+
+	return names
+
+
+class TestModuleSidebar(UnitTestCase):
+	"""The v16 `Sidebar` that the module view in the Desk actually renders.
+
+	v16 does not read `workspace_sidebar/` for this view. `boot.get_module_sidebars` resolves one
+	`Sidebar` per module from `<module>/sidebar/<scrub(title)>/<scrub(title)>.json`, and the
+	browser then nests each link under the Section Break above it: `sidebar.js
+	nest_section_items` follows the link's `child` flag, and `TypeSectionBreak.make` returns
+	before drawing anything when a section ends up with no nested item. A link written with
+	`child: 0` below a Section Break is therefore dropped silently — the panel shows the sections
+	that have children and nothing for the one that does not. That is how «گزارش‌ها» went
+	missing while «سریال‌ها» and «تنظیمات» rendered beside it.
+
+	The rules below pin the shape the panel depends on, so the same edit cannot come back
+	unnoticed.
+	"""
+
+	def test_the_module_ships_one_standard_sidebar_named_after_it(self):
+		path, doc = module_sidebar()
+
+		self.assertEqual(doc.get("doctype"), "Sidebar", f"{path.name} is not a Sidebar")
+		self.assertEqual(doc.get("module"), module_name())
+		self.assertEqual(doc.get("app"), APP.name)
+		self.assertEqual(doc.get("title"), module_name())
+		self.assertEqual(doc.get("standard"), 1, f"{path.name} is not marked standard")
+		self.assertTrue(section_indexes(nav_items := list(doc.get("items") or [])), "no sections")
+		self.assertTrue(any(not is_section(item) for item in nav_items), "no links")
+
+	def test_every_link_below_a_section_break_is_nested_in_it(self):
+		_items = list(module_sidebar()[1].get("items") or [])
+		for index in section_indexes(_items):
+			children = section_children(_items, index)
+
+			with self.subTest(section=_items[index].get("label")):
+				self.assertTrue(children, "an empty Section Break draws nothing at all")
+				for child in children:
+					self.assertEqual(
+						child.get("child"),
+						1,
+						f"«{child.get('label')}» is not nested, so the panel drops it",
+					)
+
+	def test_the_reports_section_holds_every_report_and_nothing_else(self):
+		items = list(module_sidebar()[1].get("items") or [])
+		index = next(
+			(index for index, item in enumerate(items) if is_section(item) and item.get("label") == "گزارش‌ها"),
+			None,
+		)
+		self.assertIsNotNone(index, "the panel has no «گزارش‌ها» section")
+
+		section = items[index]
+		children = section_children(items, index)
+
+		self.assertEqual(section.get("collapsible"), 1, "«گزارش‌ها» does not expand and collapse")
+		self.assertFalse(section.get("keep_closed"), "«گزارش‌ها» arrives closed, so nothing shows")
+		self.assertEqual(
+			{child.get("link_type") for child in children},
+			{"Report"},
+			"the reports section carries something that is not a report",
+		)
+		self.assertEqual(
+			{child.get("link_to") for child in children},
+			shipped_reports(),
+			"a report this app ships is reachable from the module sidebar",
+		)
+
+	def test_a_link_is_not_listed_twice(self):
+		links = [
+			(item.get("link_type"), item.get("link_to"))
+			for item in module_sidebar()[1].get("items") or []
+			if not is_section(item)
+		]
+
+		self.assertEqual(len(links), len(set(links)), f"duplicate menu entry in {links}")
+
+	def test_shortcuts_and_settings_stay_outside_the_reports_section(self):
+		items = list(module_sidebar()[1].get("items") or [])
+		index = next(
+			index for index, item in enumerate(items) if is_section(item) and item.get("label") == "گزارش‌ها"
+		)
+		children = section_children(items, index)
+		outside = {
+			item.get("link_to")
+			for item in items[: index + 1] + items[index + len(children) + 1 :]
+			if item.get("link_to")
+		}
+
+		self.assertEqual(outside & shipped_reports(), set(), "a report sits outside «گزارش‌ها»")
+		self.assertEqual(
+			outside,
+			{
+				"Warehouse and Purchasing",
+				"Logistics",
+				"Logistics Serial",
+				"Logistics Serial Assignment",
+				"Logistics Import Session",
+				"Logistics Settings",
+				"Purchase Order",
+				"Purchase Receipt",
+				"Purchase Invoice",
+				"Item",
+				"Warehouse",
+				"Stock Entry",
+				"Sales Order",
+				"Sales Invoice",
+			},
+			"the links kept out of «گزارش‌ها» changed",
+		)
+
+	def test_every_label_the_panel_shows_is_persian(self):
+		for item in module_sidebar()[1].get("items") or []:
+			label = item.get("label") or ""
+
+			with self.subTest(label=label):
+				self.assertTrue(
+					any(ord(character) > 127 for character in label),
+					"the panel shows this label, and it is not Persian",
+				)
 
 
 class TestDesktopIcon(UnitTestCase):
