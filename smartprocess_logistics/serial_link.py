@@ -8,8 +8,8 @@ arrives through the `doc_events` that `hooks_composition.approved_doc_events()` 
 `hooks.py` imports that list.
 
 No rule is decided here. Every value and every judgement comes from `core.assignment`,
-`core.delivery`, `core.eligibility` and `core.quantities`; this module reads the documents a
-decision needs and raises the refusal those modules describe. It never posts, never reverses
+`core.delivery`, `core.eligibility`, `core.normalization`, `core.quantities` and `core.serial`;
+this module reads the documents a decision needs and raises the refusal those modules describe. It never posts, never reverses
 anything, never writes a stock or ledger row, and never calls `ignore_permissions`.
 
 These events fire for every write path there is: the app's endpoints, the Desk form, the list
@@ -25,13 +25,18 @@ server-owned fields first would overwrite the very values that comparison is abo
 
 import frappe
 
-from smartprocess_logistics.api.gateway import other_delivery_links
+from smartprocess_logistics.api import gateway
 from smartprocess_logistics.core import assignment
+from smartprocess_logistics.core import authz
 from smartprocess_logistics.core import delivery as delivery_rules
 from smartprocess_logistics.core import eligibility, quantities
+from smartprocess_logistics.core import normalization
+from smartprocess_logistics.core import serial as serial_rules
+from smartprocess_logistics.core import transfer as transfer_rules
 
 ASSIGNMENT_DOCTYPE = "Logistics Serial Assignment"
 SERIAL_DOCTYPE = "Logistics Serial"
+TRANSFER_DOCTYPE = "Logistics Serial Transfer"
 INVOICE_DOCTYPE = "Sales Invoice"
 INVOICE_ITEM_DOCTYPE = "Sales Invoice Item"
 DELIVERY_DOCTYPE = "Delivery Note"
@@ -89,7 +94,11 @@ def _serial(doc):
 		_refuse("سریال این ثبت خالی است.")
 
 	serial = frappe.db.get_value(
-		SERIAL_DOCTYPE, name, ["name", "item_code", "normalized_serial"], as_dict=True
+		SERIAL_DOCTYPE,
+		name,
+		["name", "item_code", "normalized_serial"],
+		as_dict=True,
+		for_update=True,
 	)
 
 	if not serial:
@@ -99,17 +108,65 @@ def _serial(doc):
 
 
 def _invoice(doc):
+	"""The invoice this registration belongs to, locked for update, or `None` when the name matched nothing.
+
+	`docstatus` is read with the company because it is the other fact a decision needs and the other fact a
+	caller must not supply. The lock is taken here, before any count or comparison, so every later read sees
+	the invoice as it is now rather than a transaction snapshot.
+	"""
 	name = doc.get("sales_invoice")
 
 	if not name:
 		_refuse("فاکتور فروش این ثبت خالی است.")
 
-	invoice = frappe.db.get_value(INVOICE_DOCTYPE, name, ["name", "company"], as_dict=True)
-
-	if not invoice:
-		_refuse(f"فاکتور فروش «{name}» پیدا نشد.")
+	invoice = frappe.db.get_value(
+		INVOICE_DOCTYPE,
+		name,
+		["name", "company", "docstatus"],
+		as_dict=True,
+		for_update=True,
+	)
 
 	return invoice
+
+
+def _authorize_invoice(invoice):
+	"""Refuse an invoice this caller may not read, and a company they may not reach.
+
+	The CRUD path names no endpoint, so `require_invoice_access` cannot be called; the same checks are
+	inlined here. A name that matched nothing and a name in an unreachable company are the same refusal,
+	exactly as `authz.INVOICE_REFUSAL` states, so a caller cannot learn which invoice names are real.
+
+	Skipped under `_is_restore()`: the restore authorizes itself at the endpoint — role, company reachability
+	and the invoice locks — and `frappe.has_permission` would add a check it was deliberately built without.
+	"""
+	principal = gateway.principal_for(frappe.session.user)
+
+	if not invoice:
+		_refuse(authz.INVOICE_REFUSAL)
+
+	try:
+		authz.require_company(principal, invoice.get("company"))
+	except authz.AuthorizationError:
+		_refuse(authz.INVOICE_REFUSAL)
+
+	if not frappe.has_permission(INVOICE_DOCTYPE, doc=invoice.get("name"), ptype="read"):
+		_refuse(authz.INVOICE_REFUSAL)
+
+	return invoice
+
+
+def _refuse_cancelled(invoice):
+	"""Refuse a new registration on an invoice the site has cancelled.
+
+	Only new rows are refused; a cancelled invoice's own registrations must still be readable and removable.
+	A restore is the one path that may place them back, so it is skipped, as `core.export` documents.
+	"""
+	if _is_restore():
+		return
+
+	if int(invoice.get("docstatus") or 0) == authz.DOCSTATUS_CANCELLED:
+		_refuse(authz.REFUSAL_INVOICE_CANCELLED)
 
 
 def _invoice_row(doc, invoice):
@@ -127,6 +184,7 @@ def _invoice_row(doc, invoice):
 			name,
 			["name", "parent", "item_code", "qty"],
 			as_dict=True,
+			for_update=True,
 		)
 
 	if not row or row.get("parent") != invoice.get("name"):
@@ -199,9 +257,17 @@ def _refuse_excess(doc, row):
 		return
 
 	required = quantities.required_units(row.get("qty"))
-	held = frappe.db.count(
-		ASSIGNMENT_DOCTYPE,
-		{"sales_invoice": doc.get("sales_invoice"), "sales_invoice_item": row.get("name")},
+	held = len(
+		frappe.db.get_values(
+			ASSIGNMENT_DOCTYPE,
+			filters={
+				"sales_invoice": doc.get("sales_invoice"),
+				"sales_invoice_item": row.get("name"),
+			},
+			fieldname=["name"],
+			as_dict=True,
+			for_update=True,
+		)
 	)
 
 	if held + 1 > required:
@@ -254,30 +320,42 @@ def _derive_delivery(doc, serial, row):
 	doc.delivery_note_item = delivery_note_item
 
 	identity = (serial.get("item_code"), serial.get("normalized_serial"))
-	others = other_delivery_links((identity,)).get(identity, ())
+	others = gateway.other_delivery_links((identity,), for_update=True).get(identity, ())
 
 	if delivery_rules.conflicting_delivery(delivery_note, others):
 		_refuse("این سریال روی رسید تحویل فعال دیگری ثبت شده است و هم‌زمان در دو تحویل باز نمی‌شود.")
 
 
 def validate_assignment(doc, method=None):
-	"""Hold one assignment to the rules its core states, on every write path."""
+	"""Hold one assignment to the rules its core states, on every write path.
+
+	Reads are ordered by the lock plan `core.orchestration` declares — invoice, then serial, then row, then
+	assignment — and every decision is a current read under that lock. The stored row is read before anything
+	is derived, for the reason the module docstring states.
+	"""
 	if _skip_event():
 		return
+
+	invoice = _invoice(doc)
+
+	if not _is_restore():
+		_authorize_invoice(invoice)
+
+	if doc.is_new():
+		_refuse_cancelled(invoice)
+
+	serial = _serial(doc)
+	row = _invoice_row(doc, invoice)
 
 	stored = None
 
 	if not doc.is_new():
 		stored = (
 			frappe.db.get_value(
-				ASSIGNMENT_DOCTYPE, doc.name, list(IMMUTABLE_FIELDS), as_dict=True
+				ASSIGNMENT_DOCTYPE, doc.name, list(IMMUTABLE_FIELDS), as_dict=True, for_update=True
 			)
 			or {}
 		)
-
-	serial = _serial(doc)
-	invoice = _invoice(doc)
-	row = _invoice_row(doc, invoice)
 
 	if stored is not None:
 		_refuse_edit(doc, stored)
@@ -326,3 +404,166 @@ def audit_deletion(doc, method=None):
 		"Comment",
 		f"سریال «{serial}» ({doc.get('item_code')}) از ردیف {row} برداشته شد؛ رسید تحویل: {note}.",
 	)
+
+
+def validate_serial(doc, method=None):
+	"""Hold `Logistics Serial` to the rules `core/serial.py` states, on every write path.
+
+	The identity is derived on the server from `serial_no`, never read from the request, and it is
+	derived only at creation: re-deriving an existing serial would silently re-normalize it under
+	the current rule set and fight the migration that is the only place a rule change is applied.
+	So an update reasserts the stored identity and refuses a change to the fields that name it. A
+	restore (`flags.in_import`) skips the derivation — the imported row already carries the identity
+	it was first written with, and a restore preserves history rather than re-normalizing it.
+	"""
+	if _skip_event():
+		return
+
+	if doc.is_new():
+		if _is_restore():
+			return
+
+		try:
+			identity = serial_rules.derive_serial_identity(doc.get("serial_no"))
+		except normalization.SerialTextError as error:
+			_refuse(error.message)
+
+		doc.normalized_serial = identity.normalized
+		doc.normalization_version = identity.version
+		return
+
+	stored = (
+		frappe.db.get_value(
+			SERIAL_DOCTYPE,
+			doc.name,
+			["serial_no", "item_code", "normalized_serial", "normalization_version"],
+			as_dict=True,
+		)
+		or {}
+	)
+
+	changed = serial_rules.changed_identity_fields(stored, doc)
+
+	if changed:
+		_refuse(
+			f"سریال پس از ایجاد قابل ویرایش نیست («{changed[0]}» تغییر کرده است)؛"
+			" برای اصلاح، سریال را حذف و دوباره ثبت کنید."
+		)
+
+	doc.normalized_serial = stored.get("normalized_serial")
+	doc.normalization_version = stored.get("normalization_version")
+
+
+def _transfer_record(doc):
+	"""The plain record a `Logistics Serial Transfer` document is, in the shape `record_of` writes.
+
+	`core.transfer.record_issues` consumes the dictionary `record_of` returns, so the live validator
+	rebuilds that same dictionary from the document. The names here are the document's, which are
+	also the record's: the DocType fields and the child rows were chosen to *be* the record, and the
+	restore marker is the one field the document carries that `record_of` does not set.
+	"""
+	items = []
+	for item in doc.get("items") or ():
+		items.append(
+			{
+				"logistics_serial": item.get("logistics_serial"),
+				"serial_no": item.get("serial_no"),
+				"item_code": item.get("item_code"),
+				"normalized_serial": item.get("normalized_serial"),
+				"source_assignment": item.get("source_assignment"),
+				"source_row": item.get("source_row"),
+				"source_index": item.get("source_index"),
+				"acknowledged": item.get("acknowledged"),
+				"result": item.get("result"),
+				"reason": item.get("reason"),
+				"reason_message": item.get("reason_message"),
+				"target_row": item.get("target_row"),
+				"target_index": item.get("target_index"),
+			}
+		)
+
+	return {
+		"source_invoice": doc.get("source_invoice"),
+		"target_invoice": doc.get("target_invoice"),
+		"company": doc.get("company"),
+		"confirmed_token": doc.get("confirmed_token"),
+		"source_total": doc.get("source_total"),
+		"moved_count": doc.get("moved_count"),
+		"refused_count": doc.get("refused_count"),
+		"unselected_count": doc.get("unselected_count"),
+		"acknowledged_count": doc.get("acknowledged_count"),
+		"restored_from": doc.get("restored_from"),
+		"restored_on": doc.get("restored_on"),
+		"restored_by": doc.get("restored_by"),
+		"items": items,
+	}
+
+
+def _transfer_child_issues(doc):
+	"""Every child row whose copies disagree with the serial master it links to.
+
+	The pure checks say whether a row is complete; only the database says whether it is *right*.
+	Each row copies `serial_no`, `item_code` and `normalized_serial` from the master when the record
+	is written, so a row edited to point at a different serial while keeping the old copies — or to
+	keep the link while rewriting the copies — is a record that names one serial and describes
+	another. The master is read under lock so the comparison is not made against a value another
+	write is about to change.
+
+	This must not run during a restore: the archive writes children whose `logistics_serial` may
+	name a serial that no longer exists on this site, while the copies it carries are the true
+	history of what moved.
+	"""
+	issues = []
+	seen = set()
+
+	for index, item in enumerate(doc.get("items") or ()):
+		link = item.get("logistics_serial")
+		if not link or link in seen:
+			continue
+		seen.add(link)
+
+		master = (
+			frappe.db.get_value(
+				SERIAL_DOCTYPE,
+				link,
+				["serial_no", "item_code", "normalized_serial"],
+				as_dict=True,
+				for_update=True,
+			)
+			or {}
+		)
+
+		for field in ("serial_no", "item_code", "normalized_serial"):
+			if item.get(field) != master.get(field):
+				issues.append(
+					transfer_rules.RecordIssue(
+						transfer_rules.CODE_CHILD_MASTER_MISMATCH,
+						f"ردیف {index + 1} «{field}» اش با سریال پیوندشده نمی‌خواند.",
+					)
+				)
+				break
+
+	return tuple(issues)
+
+
+def validate_transfer(doc, method=None):
+	"""Hold `Logistics Serial Transfer` to the record rules `core/transfer.py` states.
+
+	The transfer document is evidence, and evidence is only worth what it agrees with itself about:
+	its header must name its rows, its rows must match their outcomes, and its provenance marker
+	must be there in full or not at all. A record that fails one of these was not written by
+	`record_of`, and this hook refuses it on every write path. The pure checks run even on a
+	restore, because a restored archive is still the archive it was; the child-master agreement
+	needs the database, so it is skipped during a restore, where a child may name a serial that no
+	longer exists here.
+	"""
+	if _skip_event():
+		return
+
+	issues = list(transfer_rules.record_issues(_transfer_record(doc)))
+
+	if not _is_restore():
+		issues.extend(_transfer_child_issues(doc))
+
+	if issues:
+		_refuse(issues[0].message)

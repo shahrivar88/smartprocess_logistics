@@ -1503,6 +1503,15 @@ def _transfer_request(
 	except authz.AuthorizationError as error:
 		_fail(error)
 
+	# The framework's own read permission on each document, after the company check above: a caller
+	# in the right company who still cannot read one of the two invoices must get the same refusal
+	# as a caller naming a foreign invoice, so the answer never reveals which name is real.
+	try:
+		gateway.assert_can_read_invoice(source.name)
+		gateway.assert_can_read_invoice(target.name)
+	except frappe.PermissionError:
+		_fail(authz.AuthorizationError(authz.CODE_INVOICE_NOT_FOUND, authz.INVOICE_REFUSAL))
+
 	# Read here rather than handed in, so that no caller reads the site before the request it is
 	# serving has been allowed: these are this app's own settings, and the policy built from them
 	# decides nothing about whether the caller may act.
@@ -1658,8 +1667,6 @@ def apply_serial_transfer(
 			_("این درخواست همان انتخابی نیست که تأیید شد. ") + _(RECOVERY_HINT),
 			title=_("انتقال سریال"),
 		)
-
-	gateway.assert_can_read_invoice(request.target_invoice)
 
 	try:
 		gateway.open_transaction()

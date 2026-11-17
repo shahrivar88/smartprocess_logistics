@@ -114,6 +114,20 @@ def approved_doc_events():
 			"validate": "smartprocess_logistics.serial_link.validate_assignment",
 			"on_trash": "smartprocess_logistics.serial_link.audit_deletion",
 		},
+		# `Logistics Serial` is the identity another document references, so it too is held to the
+		# rules `core/serial.py` states: its identity is derived on the server from `serial_no` and
+		# immutable once written. Its controller is empty on purpose, so this is the one layer
+		# every write path passes through.
+		"Logistics Serial": {
+			"validate": "smartprocess_logistics.serial_link.validate_serial",
+		},
+		# `Logistics Serial Transfer` is the evidential document the apply writes. It is held to the
+		# record rules `core/transfer.py` states — provenance, children and identity — so a forged or
+		# hand-edited record cannot be accepted as what `record_of` wrote. Its controller is empty on
+		# purpose, so this is the one layer every write path passes through.
+		"Logistics Serial Transfer": {
+			"validate": "smartprocess_logistics.serial_link.validate_transfer",
+		},
 		# The classification table is a mapping, not a setting of its own: it changes what this
 		# app lets you do with a warehouse and writes no Warehouse. The save is refused unless the
 		# writer may write the single, and the mapping the request cached is dropped afterwards so

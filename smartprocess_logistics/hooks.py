@@ -97,6 +97,16 @@ permission_query_conditions = {
 }
 
 
+# Per-document access, beyond the list query above. A serial is open only when at least one of its
+# assignments lies in a company the caller reaches; `create` defers to the role check so
+# `find_or_create_serials` is not blocked. The hook can only deny — `True` defers, `None` denies,
+# because `frappe.permissions.has_controller_permissions` reads the return through `if not
+# controller_permission` — and `serial_has_permission` returns `True`/`False`.
+has_permission = {
+	"Logistics Serial": "smartprocess_logistics.permissions.serial_has_permission",
+}
+
+
 # --- Document events --------------------------------------------------------------------
 #
 # The approved composition is the invoice-first guards and the virtual-warehouse policy. The

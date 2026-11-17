@@ -442,3 +442,22 @@ def visible_companies(principal):
 		return frozenset() if principal.strict_companies else None
 
 	return principal.companies
+
+
+def may_reach_any(principal, companies):
+	"""Whether the principal may reach at least one of `companies`.
+
+	An empty set is reachable by nobody, so a serial with no assignment is denied. An unrestricted
+	principal — no Company user permission and not strict — reaches every set, and a restricted one
+	reaches a set that overlaps its own companies. The `Logistics Serial` `has_permission` hook turns
+	this into a boolean; the hook can only deny, and `True` defers to the framework's role check.
+	"""
+	if not companies:
+		return False
+
+	visible = visible_companies(principal)
+
+	if visible is None:
+		return True
+
+	return not visible.isdisjoint(companies)

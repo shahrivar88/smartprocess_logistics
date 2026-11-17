@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 
 from smartprocess_logistics.core import eligibility
 from smartprocess_logistics.core.assignment import derive_assignment_values
-from smartprocess_logistics.core.export import canonical
+from smartprocess_logistics.core.export import RESTORE_FIELDS, TRANSFER_RESULTS, canonical
 from smartprocess_logistics.core.normalization import NormalizedSerial
 from smartprocess_logistics.core.quantities import required_units
 
@@ -115,6 +115,35 @@ CODE_MESSAGES = {
 # directions, so a reason added here without a place to store it, or stored without a reason, is a
 # failing test rather than a row nobody can read.
 RECORDABLE_REASONS = tuple(reason for reason in sorted(REASON_MESSAGES) if reason != REASON_UNKNOWN_SELECTION)
+
+# The stable codes a record issue carries. They are asserted by test, not read by the window: the
+# window shows the Persian message, and the code is how a caller or a test names the failure
+# without depending on the sentence.
+CODE_RESTORE_MARKER_PARTIAL = "TRANSFER_RESTORE_MARKER_PARTIAL"
+CODE_RESULT_INVALID = "TRANSFER_RESULT_INVALID"
+CODE_REASON_INVALID = "TRANSFER_REASON_INVALID"
+CODE_REFUSED_WITHOUT_REASON = "TRANSFER_REFUSED_WITHOUT_REASON"
+CODE_MOVED_WITH_REASON = "TRANSFER_MOVED_WITH_REASON"
+CODE_COUNT_MISMATCH = "TRANSFER_COUNT_MISMATCH"
+CODE_ACKNOWLEDGED_MISMATCH = "TRANSFER_ACKNOWLEDGED_MISMATCH"
+CODE_TOTAL_MISMATCH = "TRANSFER_TOTAL_MISMATCH"
+CODE_IDENTITY_INCOMPLETE = "TRANSFER_IDENTITY_INCOMPLETE"
+# A child row whose copies of the serial master disagree with the master it links to. This one is
+# not raised by `record_issues` — it needs the master, which lives in the database — but it shares
+# the same `RecordIssue` shape so the live validator reports it beside the pure checks.
+CODE_CHILD_MASTER_MISMATCH = "TRANSFER_CHILD_MASTER_MISMATCH"
+
+# The child-row fields that name a record row's identity. A record row is evidence because it says
+# *which serial* moved or was refused and *which source assignment* it came from; a row missing any
+# one of these is a row about nothing in particular, and a forged one can be edited to point at a
+# different serial without any of the other checks noticing.
+IDENTITY_FIELDS = (
+    "logistics_serial",
+    "serial_no",
+    "item_code",
+    "normalized_serial",
+    "source_assignment",
+)
 
 
 class TransferError(ValueError):
@@ -586,6 +615,142 @@ def record_of(plan, request):
 		"acknowledged_count": counts["acknowledged"],
 		"items": items,
 	}
+
+
+@dataclass(frozen=True)
+class RecordIssue:
+	"""One way a transfer record disagrees with itself.
+
+	The live validator refuses a record that carries one of these; the message is what an operator
+	reads and the code is what a test asserts. `code` is stable, `message` is Persian.
+	"""
+
+	code: str
+	message: str
+
+
+def record_issues(record):
+	"""Every way a transfer record can disagree with itself, as plain issues.
+
+	The evidential document's worth is that it agrees with itself whatever else changed: a header
+	whose counts name its rows, rows whose reasons match their outcomes, and a provenance marker
+	that is either there in full or not there at all. A record that fails one of these was not
+	written by `record_of` — it was made by hand, or edited — and the live validator refuses it on
+	the way in.
+
+	Read-only and pure: it takes the plain record `record_of` returns (a header dict whose `items`
+	list holds the child rows) and returns a tuple of issues, never raising, so a caller can show
+	them all at once. The database-side question — does the linked serial master agree with the
+	row's copies — is not answered here; that read belongs to the validator that has a database,
+	because it must be skipped when the record is the app's own archive coming back.
+
+	`restored_from`/`restored_on`/`restored_by` are the three `RESTORE_FIELDS` the archive carries:
+	an original record has all three empty and a restored one has all three set. Any other
+	combination is a record claiming to be two things at once.
+	"""
+	issues = []
+	items = record.get("items") or ()
+
+	marker = [field for field in RESTORE_FIELDS if record.get(field)]
+	if marker and len(marker) != len(RESTORE_FIELDS):
+		issues.append(
+			RecordIssue(
+				CODE_RESTORE_MARKER_PARTIAL,
+				"نشانهٔ بازآوری سابقه ناقص است؛ یا هر سه مقدار باید باشند یا هیچ‌کدام.",
+			)
+		)
+
+	moved = 0
+	refused = 0
+	acknowledged = 0
+
+	for index, item in enumerate(items):
+		result = item.get("result")
+
+		if result not in TRANSFER_RESULTS:
+			issues.append(
+				RecordIssue(
+					CODE_RESULT_INVALID,
+					f"نتیجهٔ «{result}» در ردیف {index + 1} شناخته‌شده نیست.",
+				)
+			)
+			continue
+
+		if result == RESULT_REFUSED:
+			refused += 1
+			reason = item.get("reason")
+
+			if not reason:
+				issues.append(
+					RecordIssue(
+						CODE_REFUSED_WITHOUT_REASON,
+						f"ردیف {index + 1} رد شده است و دلیلی ندارد.",
+					)
+				)
+			elif reason not in RECORDABLE_REASONS:
+				issues.append(
+					RecordIssue(
+						CODE_REASON_INVALID,
+						f"دلیل «{reason}» در ردیف {index + 1} در این قالب شناخته‌شده نیست.",
+					)
+				)
+		else:
+			moved += 1
+			if item.get("reason"):
+				issues.append(
+					RecordIssue(
+						CODE_MOVED_WITH_REASON,
+						f"ردیف {index + 1} منتقل شده است و دلیل رد دارد.",
+					)
+				)
+
+		if int(item.get("acknowledged") or 0):
+			acknowledged += 1
+
+		missing = [field for field in IDENTITY_FIELDS if not item.get(field)]
+		if missing:
+			issues.append(
+				RecordIssue(
+					CODE_IDENTITY_INCOMPLETE,
+					f"ردیف {index + 1} شناسهٔ ناقصی دارد («{missing[0]}» خالی است).",
+				)
+			)
+
+	if moved != int(record.get("moved_count") or 0):
+		issues.append(
+			RecordIssue(
+				CODE_COUNT_MISMATCH,
+				f"سابقه می‌گوید {record.get('moved_count')} سریال منتقل شده و ردیف‌هایش {moved} تا هستند.",
+			)
+		)
+
+	if refused != int(record.get("refused_count") or 0):
+		issues.append(
+			RecordIssue(
+				CODE_COUNT_MISMATCH,
+				f"سابقه می‌گوید {record.get('refused_count')} سریال رد شده و ردیف‌هایش {refused} تا هستند.",
+			)
+		)
+
+	if acknowledged != int(record.get("acknowledged_count") or 0):
+		issues.append(
+			RecordIssue(
+				CODE_ACKNOWLEDGED_MISMATCH,
+				f"سابقه می‌گوید {record.get('acknowledged_count')} سریال تأییدشده دارد و ردیف‌هایش {acknowledged} تا هستند.",
+			)
+		)
+
+	total = moved + refused + int(record.get("unselected_count") or 0)
+
+	if total != int(record.get("source_total") or 0):
+		issues.append(
+			RecordIssue(
+				CODE_TOTAL_MISMATCH,
+				"منتقل‌شده، رد‌شده و انتخاب‌نشده با سریال‌های مبدأ جمع نمی‌شود.",
+			)
+		)
+
+	return tuple(issues)
 
 
 def preview_of(plan, request):

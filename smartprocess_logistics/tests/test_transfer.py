@@ -11,11 +11,20 @@ from dataclasses import replace
 
 from smartprocess_logistics.core import transfer as rules
 from smartprocess_logistics.core.transfer import (
+	CODE_ACKNOWLEDGED_MISMATCH,
 	CODE_COMPANY_MISMATCH,
+	CODE_COUNT_MISMATCH,
+	CODE_IDENTITY_INCOMPLETE,
+	CODE_MOVED_WITH_REASON,
+	CODE_REASON_INVALID,
+	CODE_REFUSED_WITHOUT_REASON,
+	CODE_RESULT_INVALID,
+	CODE_RESTORE_MARKER_PARTIAL,
 	CODE_SAME_INVOICE,
 	CODE_SOURCE_NOT_CANCELLED,
 	CODE_TARGET_CANCELLED,
 	CODE_TARGET_NOT_AMENDMENT,
+	CODE_TOTAL_MISMATCH,
 	REASON_ACKNOWLEDGEMENT_MISSING,
 	REASON_ALREADY_ON_TARGET,
 	REASON_ITEM_NOT_ON_TARGET,
@@ -24,6 +33,7 @@ from smartprocess_logistics.core.transfer import (
 	REASON_TARGET_ROW_NOT_ELIGIBLE,
 	REASON_UNKNOWN_SELECTION,
 	Placement,
+	RecordIssue,
 	SourceSerial,
 	TargetRow,
 	TransferError,
@@ -32,6 +42,7 @@ from smartprocess_logistics.core.transfer import (
 	plan_transfer,
 	preview_of,
 	preview_token,
+	record_issues,
 	record_of,
 )
 from smartprocess_logistics.tests.base import UnitTestCase
@@ -646,6 +657,119 @@ class TheRecordTest(UnitTestCase):
 					"target_row",
 				],
 			)
+
+
+class TheRecordIsSelfConsistentTest(UnitTestCase):
+	"""`record_issues` is the pure half of the transfer validator (D-05).
+
+	A record that `record_of` wrote agrees with itself, so the validator's whole job is to refuse the
+	ones that do not: a forged or hand-edited header, a row whose reason contradicts its outcome, a
+	count that no longer names its rows. Each defect is pinned here without a database, because the
+	decision is pure — only the child-master comparison (which needs the linked serial's stored
+	fields) is left to the live validator.
+	"""
+
+	def clean(self):
+		return record_of(plan_transfer(request()), request())
+
+	def codes(self, issues):
+		return [issue.code for issue in issues]
+
+	def test_a_record_the_planner_wrote_has_no_issues(self):
+		self.assertEqual(record_issues(self.clean()), ())
+
+	def test_a_record_with_no_items_and_agreeing_zeroes_is_clean(self):
+		record = self.clean()
+		record["items"] = []
+		record["moved_count"] = 0
+		record["refused_count"] = 0
+		record["source_total"] = 0
+		record["acknowledged_count"] = 0
+
+		self.assertEqual(record_issues(record), ())
+
+	def test_a_partial_restore_marker_is_reported(self):
+		record = self.clean()
+		record["restored_from"] = "sp_archive_2026.json"
+		record["restored_on"] = "2026-10-30"
+		# `restored_by` left empty: two of the three, which is neither an original nor a restore.
+
+		self.assertIn(CODE_RESTORE_MARKER_PARTIAL, self.codes(record_issues(record)))
+
+	def test_a_full_restore_marker_is_not_a_partial_one(self):
+		record = self.clean()
+		record["restored_from"] = "sp_archive_2026.json"
+		record["restored_on"] = "2026-10-30"
+		record["restored_by"] = "Administrator"
+
+		self.assertNotIn(CODE_RESTORE_MARKER_PARTIAL, self.codes(record_issues(record)))
+
+	def test_a_row_with_an_unknown_result_is_reported(self):
+		record = self.clean()
+		record["items"][0]["result"] = "Banana"
+
+		self.assertIn(CODE_RESULT_INVALID, self.codes(record_issues(record)))
+
+	def test_a_refused_row_without_a_reason_is_reported(self):
+		record = self.clean()
+		record["items"][0]["result"] = "Refused"
+		record["items"][0]["reason"] = ""
+		record["items"][0]["reason_message"] = ""
+
+		self.assertIn(CODE_REFUSED_WITHOUT_REASON, self.codes(record_issues(record)))
+
+	def test_a_refused_row_with_an_unrecordable_reason_is_reported(self):
+		"""`UNKNOWN_SELECTION` names no source assignment, so it cannot live on a stored row."""
+		record = self.clean()
+		record["items"][0]["result"] = "Refused"
+		record["items"][0]["reason"] = REASON_UNKNOWN_SELECTION
+
+		self.assertIn(CODE_REASON_INVALID, self.codes(record_issues(record)))
+
+	def test_a_moved_row_with_a_reason_is_reported(self):
+		record = self.clean()
+		record["items"][0]["result"] = "Moved"
+		record["items"][0]["reason"] = REASON_NO_ROOM
+
+		self.assertIn(CODE_MOVED_WITH_REASON, self.codes(record_issues(record)))
+
+	def test_a_row_missing_an_identity_field_is_reported(self):
+		record = self.clean()
+		record["items"][0]["serial_no"] = ""
+
+		self.assertIn(CODE_IDENTITY_INCOMPLETE, self.codes(record_issues(record)))
+
+	def test_a_moved_count_that_disagrees_with_its_rows_is_reported(self):
+		record = self.clean()
+		record["moved_count"] = record["moved_count"] + 1
+
+		self.assertIn(CODE_COUNT_MISMATCH, self.codes(record_issues(record)))
+
+	def test_an_acknowledged_count_that_disagrees_is_reported(self):
+		record = self.clean()
+		record["acknowledged_count"] = 2
+
+		self.assertIn(CODE_ACKNOWLEDGED_MISMATCH, self.codes(record_issues(record)))
+
+	def test_a_total_that_does_not_add_up_is_reported(self):
+		record = self.clean()
+		record["unselected_count"] = 5
+
+		self.assertIn(CODE_TOTAL_MISMATCH, self.codes(record_issues(record)))
+
+	def test_every_issue_is_reported_at_once(self):
+		record = self.clean()
+		record["restored_from"] = "sp_archive_2026.json"
+		record["items"][10]["reason"] = ""
+		record["items"][10]["reason_message"] = ""
+		record["items"][11]["reason"] = REASON_UNKNOWN_SELECTION
+
+		issues = record_issues(record)
+
+		self.assertEqual(
+			self.codes(issues),
+			[CODE_RESTORE_MARKER_PARTIAL, CODE_REFUSED_WITHOUT_REASON, CODE_REASON_INVALID],
+		)
 
 
 class ThePreviewOfWhatWillHappenTest(UnitTestCase):

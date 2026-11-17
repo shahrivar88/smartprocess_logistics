@@ -54,7 +54,7 @@ STANDARD_DOC_EVENT_DOCTYPES = (
 	"Stock Entry",
 	"Stock Reservation Entry",
 )
-OWN_DOC_EVENT_DOCTYPES = ("Logistics Serial Assignment", "Logistics Settings")
+OWN_DOC_EVENT_DOCTYPES = ("Logistics Serial", "Logistics Serial Assignment", "Logistics Serial Transfer", "Logistics Settings")
 
 STANDARD_SCRIPT_DOCTYPES = ("Sales Invoice", "Sales Order", "Quotation", "Purchase Receipt", "Stock Entry")
 OWN_SCRIPT_DOCTYPES = ("Logistics Settings",)

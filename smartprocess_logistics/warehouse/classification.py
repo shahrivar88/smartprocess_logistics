@@ -13,9 +13,13 @@ same binary question they always asked. Both answers come from here:
 * `classification_of_type(type)` is the three-way answer the reports show, as an English code.
   Persian labels belong to the display layer (`policy.CLASSIFICATION_LABELS`,
   `translations/fa.csv`) and are never stored or compared.
-* `virtual_types()` is the effective tuple of non-physical names, and every guard in this app
-  asks membership of it. Falling back to it means a stored mapping reaches all of them without
-  each one learning about the settings screen.
+* `virtual_types()` is the effective tuple of non-physical names, which the report and purchase
+  guards fold the stored mapping into. The two binary guards here — `is_virtual()` and
+  `physical_warehouses()` — do **not** fold it, because folding a `blank → virtual` row into a
+  tuple of names loses it: the blank type is the empty string, and the membership test treats an
+  empty name as physical before it ever looks at the tuple. They ask the mapping-aware
+  `policy.is_virtual_type(warehouse_type, policy_types(), stored_mapping())` instead, so a
+  warehouse with no type obeys the row an administrator saved for it.
 
 The effective policy is the standard type names or `sp_virtual_warehouse_types`, adjusted by the
 administrator's mapping in Logistics Settings. It is computed, never written: an empty table is
@@ -163,12 +167,11 @@ def is_virtual(warehouse):
 	if not warehouse:
 		return False
 	warehouse_type = frappe.get_cached_value("Warehouse", warehouse, "warehouse_type")
-	return policy.is_virtual_type(warehouse_type, virtual_types())
+	return policy.is_virtual_type(warehouse_type, policy_types(), stored_mapping())
 
 
 def physical_warehouses(company):
 	"""Leaf warehouses of a company whose type is not virtual."""
-	types = virtual_types()
 	rows = frappe.get_list(
 		"Warehouse",
 		filters={"company": company, "is_group": 0},
@@ -176,5 +179,7 @@ def physical_warehouses(company):
 		limit_page_length=0,
 	)
 	return tuple(
-		row.get("name") for row in rows if not policy.is_virtual_type(row.get("warehouse_type"), types)
+		row.get("name")
+		for row in rows
+		if not policy.is_virtual_type(row.get("warehouse_type"), policy_types(), stored_mapping())
 	)

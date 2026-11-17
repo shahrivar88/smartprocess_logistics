@@ -5,6 +5,87 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.8 — 2026-11-18
+
+**The app now authorizes every write the CRUD path can reach, derives a serial's identity on the
+server instead of trusting the request, refuses a transfer record that disagrees with itself, and
+takes its locks in one fixed order.**
+
+### Fixed
+
+- **A registration could name an invoice the caller could not read (D-01).** The Desk form and the
+  REST layer reach `Logistics Serial Assignment` without passing an endpoint, so
+  `require_invoice_access` never ran. `serial_link._authorize_invoice` now inlines the same two
+  checks — company reachability through `authz.require_company`, then `frappe.has_permission` on
+  the invoice — and answers a missing invoice and a foreign-company invoice with the one refusal
+  `authz.INVOICE_REFUSAL` already states, so a caller cannot learn which names are real. A restore
+  skips it, because the restore authorizes itself at the endpoint.
+- **`Logistics Serial` had no per-document permission hook (D-02).** `permissions.serial_has_permission`
+  reads the companies the serial is assigned to and asks the new pure function
+  `authz.may_reach_any`, which denies an empty assignment set and lets an unrestricted principal
+  reach every set. It is registered in `hooks.py` and returns `True` or `False` only: the v16 hook
+  can deny, and `None` would deny, so `True` is what defers to the framework's role check.
+- **A serial's identity came from the request (D-03).** `core/serial.py` holds the rule and
+  `serial_link.validate_serial` applies it: `normalized_serial` and `normalization_version` are
+  derived from `serial_no` on the server at creation, an update reasserts the stored identity and
+  refuses a change to the fields that name it, and a restore keeps the identity it was written
+  with. The limitation the module documents is unchanged — a direct SQL write can still forge a
+  row, and no database trigger was added.
+- **A new registration could be placed on a cancelled invoice (D-04).** `_refuse_cancelled` refuses
+  a new row when `docstatus` is cancelled. Existing registrations on a cancelled invoice stay
+  readable and removable, and a restore is skipped.
+- **A `Logistics Serial Transfer` record could contradict its own rows (D-05).** `core/transfer.py`
+  gains `RecordIssue` and `record_issues`, a pure read-only check that the restore marker is
+  complete or absent, that `result` is a real outcome, that a refused row carries a recordable
+  reason and a moved row carries none, that every identity field is present, and that the header
+  counts agree with the rows and with `source_total`. `serial_link.validate_transfer` runs it on
+  every write path, and adds the one check that needs the database: each child row's copies of
+  `serial_no`, `item_code` and `normalized_serial` must match the serial master it links to,
+  read under lock. That comparison is skipped during a restore, where a child may name a serial
+  that no longer exists on the site.
+- **A transfer request leaked whether an invoice name was real (D-06).** `_transfer_request`
+  reads both invoices through `gateway.assert_can_read_invoice` after the company check and
+  reports a permission failure as `INVOICE_REFUSAL`. The late check in `apply_serial_transfer`
+  was removed: it ran before the transaction opened, so authorization now happens in the request
+  that is re-validated under the invoice locks.
+- **The warehouse guards ignored the stored type mapping (D-07).** `warehouse.classification`
+  passed only the resolved type tuple, and the blank type is the empty string, so `is_virtual` and
+  `physical_warehouses` treated an unmapped warehouse as physical before the tuple was
+  consulted. Both now call `policy.is_virtual_type` with `policy_types()` and `stored_mapping()`.
+- **Concurrent writes could read stale state (S-01…S-04).** Every read that feeds a decision is
+  now a current read under lock, in the order `core.orchestration` declares — invoice, serial,
+  row, assignment. The serial, invoice, invoice row and stored assignment reads pass
+  `for_update=True`; the quantity guard counts under lock through `get_values(..., for_update=True)`
+  instead of `frappe.db.count`; and `_derive_delivery` reads other delivery links through
+  `other_delivery_links(..., for_update=True)`, a new branch that uses `frappe.db.get_values` with
+  the lock while the planner's read stays plain.
+
+### Added
+
+- `smartprocess_logistics/core/serial.py`, and `tests/test_core_serial.py` with `tests/test_serial_link.py`.
+- `Logistics Serial` and `Logistics Serial Transfer` in `hooks_composition.approved_doc_events()`
+  and in `interop.OWN_DOC_EVENT_DOCTYPES`. Their controllers stay empty: the events are the one
+  layer every write path passes through.
+- Tests in `test_transfer`, `test_warehouse_policy`, `test_authz`, `test_classification_settings`,
+  `test_lifecycle` and `test_integrity`. The database-free suite runs 1775 tests.
+
+### Verified
+
+- Concurrent quantity allocation (S-01/S-02): three rounds, each with exactly one accepted claim
+  and one assignment on the row; the refused request left no serial master.
+- Concurrent serial creation and concurrent assignment deletion: one master and a correct link in
+  every round; each round refused one request, by the guard or by the rule.
+- Concurrent delivery claims (S-04): the invariant held under race — one winner, one serial master,
+  one live claim, attributed to the winning invoice and to the delivery row the server derived.
+  The losing request was stopped by the row-level concurrency guard rather than by the claim rule.
+  The claim rule itself was then proven without a race: a second, different delivery was refused
+  with `DELIVERY_CONFLICT`, and exactly one claim remained.
+
+### Unchanged
+
+- No DocType, schema, patch or fixture. Nothing here writes a stock or ledger row, and the app
+  still never posts. The warehouse guards only read the mapping that already exists.
+
 ## 0.7.7 — 2026-11-17
 
 **The Logistics tile now sits in the ERPNext rail beside Accounting, Buying, Selling and Stock,

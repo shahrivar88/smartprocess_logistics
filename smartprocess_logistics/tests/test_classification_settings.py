@@ -173,6 +173,21 @@ class TestTheOneResolver(UnitTestCase):
 
 		self.assertIn("return policy.non_physical_names(policy_types(), stored_mapping())", source)
 
+	def test_the_binary_guards_ask_the_mapping_aware_answer(self):
+		"""`is_virtual` and `physical_warehouses` must fold a stored `blank → virtual` row, which a
+		tuple of names cannot express: the blank type is the empty string, and membership treats it
+		as physical before any tuple. Both call the resolver with the policy types and the stored
+		mapping rather than the folded tuple."""
+		source = RESOLVER.read_text(encoding="utf-8")
+
+		self.assertIn(
+			"policy.is_virtual_type(warehouse_type, policy_types(), stored_mapping())", source
+		)
+		self.assertIn(
+			'policy.is_virtual_type(row.get("warehouse_type"), policy_types(), stored_mapping())',
+			source,
+		)
+
 	def test_no_other_module_defines_a_classification_answer(self):
 		offenders = []
 		for path in sorted(APP.rglob("*.py")):

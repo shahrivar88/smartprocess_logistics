@@ -763,7 +763,9 @@ class HooksRegistrationTest(UnitTestCase):
 				"Purchase Receipt",
 				"Stock Entry",
 				"Stock Reservation Entry",
+				"Logistics Serial",
 				"Logistics Serial Assignment",
+				"Logistics Serial Transfer",
 			},
 		)
 		self.assertEqual(
@@ -804,7 +806,9 @@ class HooksRegistrationTest(UnitTestCase):
 				"Purchase Receipt",
 				"Stock Entry",
 				"Stock Reservation Entry",
+				"Logistics Serial",
 				"Logistics Serial Assignment",
+				"Logistics Serial Transfer",
 				"Logistics Settings",
 			},
 		)

@@ -71,3 +71,34 @@ def serial_query_conditions(user, doctype=None):
 def assignment_query_conditions(user, doctype=None):
 	"""Assignments of the caller's companies."""
 	return _condition(user, f"`{_table(gateway.ASSIGNMENT_DOCTYPE)}`.`company`")
+
+
+def serial_has_permission(doc, ptype, user, debug=False):
+	"""Allow or deny a per-document action on `Logistics Serial`.
+
+	`create` and anything but read/write/delete defer to the framework's role check. A serial is
+	readable or writable only when at least one of its assignments lies in a company this caller
+	reaches; a serial with no assignment, or whose assignments all lie elsewhere, is denied. The
+	hook can only deny, and `True` — not `None` — is what defers to the role permissions, as
+	`frappe.permissions.has_controller_permissions` reads the return.
+	"""
+	if ptype not in ("read", "write", "delete"):
+		return True
+
+	name = doc.get("name") if doc is not None else None
+
+	if not name:
+		return False
+
+	companies = frozenset(
+		company
+		for company in frappe.get_all(
+			gateway.ASSIGNMENT_DOCTYPE,
+			filters={"logistics_serial": name},
+			pluck="company",
+			distinct=True,
+		)
+		if company
+	)
+
+	return authz.may_reach_any(gateway.principal_for(user), companies)

@@ -67,3 +67,51 @@ class TestSales(UnitTestCase):
 
 	def test_a_physical_warehouse_is_allowed(self):
 		self.assertIsNone(policy.sales_source_problem("Stores", False, 1))
+
+
+class TestTheMappingAwareResolver(UnitTestCase):
+	"""D-07: the three-state resolver answers from the stored mapping, not only the shipped names.
+
+	A stored `blank → virtual` row reaches a warehouse that carries no type, which a tuple of names
+	could never catch: the blank type is the empty string, and `kind` treats an empty name as
+	physical before it looks at any tuple. A stored row can also make a custom type `transit`, or
+	pull a type the site calls virtual back to `physical`. Each of those is the administrator's
+	mapping winning over the default, through `classification_of` and its binary `is_virtual_type`.
+	"""
+
+	def test_a_blank_type_becomes_virtual_when_the_mapping_says_so(self):
+		self.assertEqual(
+			policy.classification_of("", policy.DEFAULT_VIRTUAL_TYPES, {policy.UNTYPED: policy.VIRTUAL}),
+			policy.VIRTUAL,
+		)
+		self.assertTrue(
+			policy.is_virtual_type("", policy.DEFAULT_VIRTUAL_TYPES, {policy.UNTYPED: policy.VIRTUAL})
+		)
+
+	def test_a_blank_type_without_a_mapping_stays_physical(self):
+		self.assertEqual(policy.classification_of("", policy.DEFAULT_VIRTUAL_TYPES), policy.PHYSICAL)
+		self.assertFalse(policy.is_virtual_type("", policy.DEFAULT_VIRTUAL_TYPES))
+
+	def test_a_custom_type_becomes_transit_when_the_mapping_says_so(self):
+		self.assertEqual(
+			policy.classification_of(
+				"On the way", policy.DEFAULT_VIRTUAL_TYPES, {"On the way": policy.TRANSIT}
+			),
+			policy.TRANSIT,
+		)
+		self.assertTrue(
+			policy.is_virtual_type("On the way", policy.DEFAULT_VIRTUAL_TYPES, {"On the way": policy.TRANSIT})
+		)
+
+	def test_transit_is_transit_without_any_mapping(self):
+		self.assertEqual(policy.classification_of("Transit", policy.DEFAULT_VIRTUAL_TYPES), policy.TRANSIT)
+		self.assertTrue(policy.is_virtual_type("Transit", policy.DEFAULT_VIRTUAL_TYPES))
+
+	def test_the_mapping_can_pull_a_shipped_virtual_type_back_to_physical(self):
+		self.assertEqual(
+			policy.classification_of("Virtual", policy.DEFAULT_VIRTUAL_TYPES, {"Virtual": policy.PHYSICAL}),
+			policy.PHYSICAL,
+		)
+		self.assertFalse(
+			policy.is_virtual_type("Virtual", policy.DEFAULT_VIRTUAL_TYPES, {"Virtual": policy.PHYSICAL})
+		)

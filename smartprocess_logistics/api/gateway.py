@@ -1379,7 +1379,7 @@ def _chunks(values, size=IN_CHUNK):
 		yield values[start : start + size]
 
 
-def other_delivery_links(identities):
+def other_delivery_links(identities, for_update=False):
 	"""Delivery links of the **other** registrations of the same serial identities.
 
 	`identities` are `(item_code, normalized_serial)` pairs. The answer maps each identity to
@@ -1389,11 +1389,15 @@ def other_delivery_links(identities):
 
 	Read by normalized text rather than through `Logistics Serial`, because an identity with no
 	serial record yet cannot be referenced, and the question is about the identity. The item code
-	is matched in Python: `get_all` cannot express a tuple of pairs, and a normalized serial is
-	specific enough that the candidate rows are few.
+	is matched in Python: neither read below can express a tuple of pairs, and a normalized serial
+	is specific enough that the candidate rows are few.
 
 	Registrations with no delivery are left out. They are the pre-existing acknowledgement case —
 	a serial named on two invoices — and calling that a delivery conflict would be a new rule.
+
+	`for_update` asks for a locking read, so a conflict decision made under the invoice lock sees
+	the deliveries committed now rather than the transaction's first view. `_derive_delivery`
+	passes `True`; the planner's read stays a plain one.
 	"""
 	wanted = tuple(sorted({identity for identity in identities if identity and identity[1]}))
 
@@ -1404,14 +1408,25 @@ def other_delivery_links(identities):
 	rows = []
 
 	for chunk in _chunks(normalized):
-		rows.extend(
-			frappe.get_all(
-				ASSIGNMENT_DOCTYPE,
-				filters={"normalized_serial": ["in", chunk], "delivery_note": ["is", "set"]},
-				fields=["item_code", "normalized_serial", "delivery_note"],
-				limit_page_length=0,
+		if for_update:
+			rows.extend(
+				frappe.db.get_values(
+					ASSIGNMENT_DOCTYPE,
+					filters={"normalized_serial": ["in", chunk], "delivery_note": ["is", "set"]},
+					fieldname=["item_code", "normalized_serial", "delivery_note"],
+					as_dict=True,
+					for_update=True,
+				)
 			)
-		)
+		else:
+			rows.extend(
+				frappe.get_all(
+					ASSIGNMENT_DOCTYPE,
+					filters={"normalized_serial": ["in", chunk], "delivery_note": ["is", "set"]},
+					fields=["item_code", "normalized_serial", "delivery_note"],
+					limit_page_length=0,
+				)
+			)
 
 	notes = {
 		note.get("name"): note

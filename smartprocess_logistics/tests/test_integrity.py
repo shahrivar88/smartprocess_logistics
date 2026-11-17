@@ -569,7 +569,9 @@ class TestHooksAreRegisteredAndSafe(UnitTestCase):
 				"Purchase Receipt",
 				"Stock Entry",
 				"Stock Reservation Entry",
+				"Logistics Serial",
 				"Logistics Serial Assignment",
+				"Logistics Serial Transfer",
 				"Logistics Settings",
 			},
 		)

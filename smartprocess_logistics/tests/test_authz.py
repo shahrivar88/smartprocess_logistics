@@ -28,6 +28,7 @@ from smartprocess_logistics.core.authz import (
 	InvoiceRef,
 	Principal,
 	authorize,
+	may_reach_any,
 	require_company,
 	require_endpoint,
 	require_invoice_access,
@@ -181,6 +182,28 @@ class TestCompanyIsolation(UnitTestCase):
 
 	def test_visible_companies_reports_strict_and_unset_as_empty(self):
 		self.assertEqual(visible_companies(STRICT_NO_COMPANY), frozenset())
+
+
+class TestMayReachAny(UnitTestCase):
+	def test_an_empty_set_is_reached_by_nobody(self):
+		for principal in (EDITOR_ACCOUNT, ALPHA_EDITOR, STRICT_NO_COMPANY, GUEST):
+			with self.subTest(user=principal.user):
+				self.assertFalse(may_reach_any(principal, frozenset()))
+
+	def test_an_unrestricted_principal_reaches_any_nonempty_set(self):
+		self.assertTrue(may_reach_any(EDITOR_ACCOUNT, {"Alpha"}))
+		self.assertTrue(may_reach_any(EDITOR_ACCOUNT, {"Alpha", "Beta"}))
+
+	def test_a_restricted_principal_reaches_its_own_companies(self):
+		self.assertTrue(may_reach_any(ALPHA_EDITOR, {"Alpha"}))
+		self.assertTrue(may_reach_any(ALPHA_EDITOR, {"Alpha", "Beta"}))
+
+	def test_a_restricted_principal_does_not_reach_another_company(self):
+		self.assertFalse(may_reach_any(ALPHA_EDITOR, {"Beta"}))
+		self.assertFalse(may_reach_any(ALPHA_EDITOR, {"Beta", "Gamma"}))
+
+	def test_strict_without_a_company_reaches_no_set(self):
+		self.assertFalse(may_reach_any(STRICT_NO_COMPANY, {"Alpha"}))
 
 
 class TestInvoiceAccess(UnitTestCase):
