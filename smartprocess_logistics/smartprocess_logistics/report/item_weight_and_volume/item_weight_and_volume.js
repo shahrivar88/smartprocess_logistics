@@ -24,10 +24,16 @@ frappe.query_reports["Item Weight and Volume"] = {
 	],
 
 	formatter: function (value, row, column, data, default_formatter) {
-		const text = default_formatter(value, row, column, data);
+		const text = column.sp_quantity
+			? smartprocess_logistics.report_defaults.quantity(value, row, column, data, default_formatter)
+			: default_formatter(value, row, column, data);
 		if (data && data.row_type === "جمع سند") {
 			return "<b>" + text + "</b>";
 		}
 		return text;
+	},
+
+	onload: function (report) {
+		smartprocess_logistics.report_defaults.apply(report);
 	},
 };

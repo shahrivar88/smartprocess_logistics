@@ -78,6 +78,14 @@ frappe.query_reports["Purchased Not Received"] = {
 			return __("قابل تعیین نیست");
 		}
 
+		if (column.sp_quantity) {
+			return smartprocess_logistics.report_defaults.quantity(value, row, column, data, default_formatter);
+		}
+
 		return default_formatter(value, column, data);
+	},
+
+	onload(report) {
+		smartprocess_logistics.report_defaults.apply(report);
 	},
 };

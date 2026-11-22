@@ -74,10 +74,16 @@ frappe.query_reports["Missing Sales Serials"] = {
 			return SERIAL_STATE_LABELS[value];
 		}
 
+		if (column.sp_quantity) {
+			return smartprocess_logistics.report_defaults.quantity(value, row, column, data, default_formatter);
+		}
+
 		return default_formatter(value, column, data);
 	},
 
 	onload(report) {
+		smartprocess_logistics.report_defaults.apply(report);
+
 		report.page.add_inner_button(__("ثبت سریال"), () => {
 			frappe.set_route("List", "Sales Invoice", { status: "Submitted" });
 		});

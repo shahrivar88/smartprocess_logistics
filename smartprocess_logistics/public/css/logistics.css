@@ -775,3 +775,19 @@
 	vertical-align: top;
 	word-break: break-word;
 }
+
+/* --- report pages --------------------------------------------------------------------------
+ *
+ * One class, added by `report_defaults.js` on this app's own reports only, so nothing here can
+ * reach a report another app draws. Data keeps a regular weight; the heading row keeps its
+ * emphasis, because the column labels are what the eye uses to find the column it wants.
+ */
+.sp-logistics-report .dt-cell,
+.sp-logistics-report .dt-cell__content {
+	font-weight: 400;
+}
+
+.sp-logistics-report .dt-header .dt-cell,
+.sp-logistics-report .dt-header .dt-cell__content {
+	font-weight: 600;
+}

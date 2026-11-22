@@ -7,4 +7,16 @@ frappe.query_reports["Inventory and Procurement Dashboard"] = {
 		{ fieldname: "from_date", label: __("از تاریخ سفارش"), fieldtype: "Date" },
 		{ fieldname: "to_date", label: __("تا تاریخ سفارش"), fieldtype: "Date" },
 	],
+
+	formatter(value, row, column, data, default_formatter) {
+		if (column.sp_quantity) {
+			return smartprocess_logistics.report_defaults.quantity(value, row, column, data, default_formatter);
+		}
+
+		return default_formatter(value, row, column, data);
+	},
+
+	onload(report) {
+		smartprocess_logistics.report_defaults.apply(report);
+	},
 };

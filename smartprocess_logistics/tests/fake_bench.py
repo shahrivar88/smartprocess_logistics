@@ -521,6 +521,7 @@ class FakeReadRuntime(FakeLifecycle):
 	"""
 
 	MODULES = FakeLifecycle.MODULES + (
+		"frappe.defaults",
 		"frappe.permissions",
 		"smartprocess_logistics.api",
 		"smartprocess_logistics.api.gateway",
@@ -601,6 +602,13 @@ class FakeReadRuntime(FakeLifecycle):
 		frappe.db.escape = self.escape
 		frappe.db.get_single_value = self.get_single_value
 
+		# The report defaults read the user's and the site's own defaults by name. No test here
+		# sets one, and the empty string is what a site with no default answers, which is the
+		# case these reads must survive.
+		defaults = types.ModuleType("frappe.defaults")
+		defaults.get_user_default = lambda key, user=None: ""
+		defaults.get_global_default = lambda key: ""
+
 		permissions = types.ModuleType("frappe.permissions")
 		permissions.get_user_permissions = self.get_user_permissions
 
@@ -610,6 +618,7 @@ class FakeReadRuntime(FakeLifecycle):
 		# through the attribute instead, which is why the base runtime gets away with neither.
 		frappe.__path__ = []
 		sys.modules["frappe.utils"] = frappe.utils
+		sys.modules["frappe.defaults"] = defaults
 		sys.modules["frappe.permissions"] = permissions
 
 		return frappe

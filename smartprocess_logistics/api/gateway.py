@@ -29,6 +29,7 @@ from frappe import _, flags
 # this site, `frappe.permissions` is the one submodule this app uses that is absent from a cold
 # interpreter. Reaching for it through the package made the **first request handled by every new
 # worker** raise AttributeError, and pass on the second.
+from frappe.defaults import get_global_default, get_user_default
 from frappe.permissions import get_user_permissions
 from frappe.utils import now
 
@@ -1365,6 +1366,29 @@ class FrappeGateway:
 		values.update(overrides)
 
 		return importer.ImportRequest(**values)
+
+	# --- report defaults ---------------------------------------------------------
+
+	def permitted_companies(self):
+		"""Every Company this caller may read, through the framework's own list query."""
+		return [row.get("name") for row in frappe.get_list("Company", fields=["name"], limit_page_length=0)]
+
+	def default_company(self):
+		"""The company the caller's own defaults name, without deciding whether it is theirs."""
+		return get_user_default("Company") or get_global_default("company") or ""
+
+	def fiscal_years(self):
+		"""Every Fiscal Year, by its real start and end date.
+
+		`frappe.get_all` because these three fields are configuration, not business data, and a
+		reader allowed to run a report has no reason to hold read permission on the calendar
+		itself. Nothing is written.
+		"""
+		return frappe.get_all(
+			"Fiscal Year",
+			fields=["name", "year_start_date", "year_end_date"],
+			limit_page_length=0,
+		)
 
 
 # Values per `in (...)` filter. A site with a hundred thousand serials would otherwise build one

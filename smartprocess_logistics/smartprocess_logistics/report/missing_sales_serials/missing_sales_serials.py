@@ -82,6 +82,11 @@ FIELD_TYPES = {
 	"company": ("Link", "Company"),
 }
 
+# Columns whose value is a quantity and is drawn by `report_defaults.quantity`: a whole number
+# without decimal places, a fractional one with every digit it really has. The unit counts are
+# `Int` and need no formatter.
+QUANTITY_COLUMNS = frozenset({"invoiced_qty"})
+
 
 def execute(filters=None):
 	filters = frappe._dict(filters or {})
@@ -158,6 +163,9 @@ def _columns():
 
 		if options:
 			column["options"] = options
+
+		if name in QUANTITY_COLUMNS:
+			column["sp_quantity"] = 1
 
 		columns.append(column)
 

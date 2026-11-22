@@ -54,7 +54,13 @@ def columns():
 		{"label": _("شناسه بار"), "fieldname": "cargo_ref", "fieldtype": "Data", "width": 130},
 		{"label": _("کالا"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 110},
 		{"label": _("نام کالا"), "fieldname": "item_name", "fieldtype": "Data", "width": 160},
-		{"label": _("مقدار (Stock UOM)"), "fieldname": "quantity", "fieldtype": "Float", "width": 120},
+		{
+			"sp_quantity": 1,
+			"label": _("مقدار (Stock UOM)"),
+			"fieldname": "quantity",
+			"fieldtype": "Float",
+			"width": 120,
+		},
 		{"label": _("وزن خالص"), "fieldname": "net_weight", "fieldtype": "Float", "width": 100},
 		{"label": _("وزن ناخالص"), "fieldname": "gross_weight", "fieldtype": "Float", "width": 100},
 		{"label": _("حجم (cm³)"), "fieldname": "volume_cm3", "fieldtype": "Float", "width": 100},
@@ -67,6 +73,7 @@ def columns():
 			"width": 90,
 		},
 		{
+			"sp_quantity": 1,
 			"label": _("مقدار ردشده (Stock UOM)"),
 			"fieldname": "rejected_qty",
 			"fieldtype": "Float",

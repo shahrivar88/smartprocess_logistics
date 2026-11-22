@@ -43,6 +43,7 @@ from smartprocess_logistics.core import (
 	export,
 	importer,
 	orchestration,
+	report_defaults,
 	transfer,
 )
 from smartprocess_logistics.core.assignment import AssignmentIdentityError, reject_supplied_identity
@@ -497,6 +498,38 @@ def get_serial_assignments(sales_invoice, limit=None, offset=None):
 		"offset": offset,
 		"assignments": [dict(row) for row in gateway.list_assignments(invoice.name, limit, offset)],
 	}
+
+
+# --- what a Logistics report opens on -----------------------------------------------
+
+
+@frappe.whitelist(methods=["GET"])
+def report_filter_defaults():
+	"""The company and date window this app's reports open on.
+
+	Read-only, and shaped by the caller's own permissions: the company is one the framework's
+	permission-checked list query already returned for them, so no company they cannot read is
+	ever named. `from_date` is the start of the `Fiscal Year` that contains today and `to_date`
+	is today; a site with no fiscal year gets an empty start rather than an invented boundary.
+	"""
+	gateway = FrappeGateway()
+	principal = gateway.principal()
+	visible = authz.visible_companies(principal)
+	company = report_defaults.choose_company(
+		gateway.default_company(), gateway.permitted_companies(), visible
+	)
+
+	# The company the caller will read reports for is checked by `core.authz` like every other
+	# company in this app, rather than trusted because a default named it.
+	if company:
+		try:
+			authz.require_company(principal, company)
+		except authz.AuthorizationError as error:
+			_fail(error)
+
+	from_date, _to_date = report_defaults.fiscal_year_window(frappe.utils.nowdate(), gateway.fiscal_years())
+
+	return {"company": company or "", "from_date": from_date, "to_date": frappe.utils.nowdate()}
 
 
 @frappe.whitelist(methods=["POST"])

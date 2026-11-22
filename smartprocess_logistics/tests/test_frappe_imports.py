@@ -220,6 +220,9 @@ ENDPOINTS = (
 	"preview_restore_audit_records",
 	"restore_audit_records",
 	"restore_cancelled_serial_history",
+	# What this app's reports open on: one read that names only the companies the caller may
+	# read, through `core.authz`. It writes nothing, so it is named read-only below as well.
+	"report_filter_defaults",
 )
 
 WRITE_METHODS = frozenset(
@@ -265,6 +268,8 @@ READ_ONLY_ENDPOINTS = (
 	# nothing at all: the only state it leaves behind is the token it returns, which is computed
 	# and not kept.
 	"preview_serial_transfer",
+	# The report open defaults: a read of the caller's company list and the site's fiscal years.
+	"report_filter_defaults",
 )
 
 ORCHESTRATION_WRITES = frozenset(

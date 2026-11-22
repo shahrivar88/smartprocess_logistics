@@ -1,4 +1,4 @@
-"""The seven display switches behind the sales stock lines.
+"""The eight display switches behind the Desk's stock lines and the receipt's warehouse type.
 
 They decide what the Desk draws; they are not an access-control boundary. Every endpoint they
 gate applies the same company scope and permission checks with a switch on or off, so a client
@@ -25,6 +25,7 @@ SHOW_QUOTATION_ITEM_STOCK = "sp_show_quotation_item_stock"
 SHOW_QUOTATION_WAREHOUSE_STOCK = "sp_show_quotation_warehouse_stock"
 SHOW_SO_ITEM_STOCK = "sp_show_so_item_stock"
 SHOW_SO_WAREHOUSE_STOCK = "sp_show_so_warehouse_stock"
+SHOW_PR_WAREHOUSE_TYPE = "sp_show_pr_warehouse_type"
 
 FIELDS = (
 	SHOW_SI_ITEM_STOCK,
@@ -34,6 +35,7 @@ FIELDS = (
 	SHOW_QUOTATION_WAREHOUSE_STOCK,
 	SHOW_SO_ITEM_STOCK,
 	SHOW_SO_WAREHOUSE_STOCK,
+	SHOW_PR_WAREHOUSE_TYPE,
 )
 
 CACHE_KEY = "sp_visibility_settings"
@@ -49,7 +51,7 @@ def _switch(field, stored):
 
 
 def load():
-	"""All seven switches, defaults applied, cached for this request."""
+	"""All eight switches, defaults applied, cached for this request."""
 	cached = getattr(frappe.local, CACHE_KEY, None)
 	if cached is None:
 		meta = frappe.get_meta(SETTINGS_DOCTYPE)

@@ -47,8 +47,11 @@ required_apps = ["frappe", "erpnext"]
 # directory, which this deployment bind-mounts read-only, so a `bench build` step could not
 # write its output here even if it ran. A plain path needs no build.
 #
-# The report's own `.js` is loaded by Frappe from its folder and needs no hook.
+# The report's own `.js` is loaded by Frappe from its folder and needs no hook. The defaults and
+# display helper is not: it is read by eight reports, so it is loaded once for the Desk rather
+# than copied into each report file.
 app_include_css = ["/assets/smartprocess_logistics/css/logistics.css"]
+app_include_js = ["/assets/smartprocess_logistics/js/report_defaults.js"]
 
 # The approved scripts. The development composition appends the committed-stock panel file from
 # `hooks_commitment.py`; the release subset leaves it out.

@@ -29,9 +29,14 @@ def approved_doctype_js():
 		# Stock-aware Item and warehouse selectors for a document that only plans: the
 		# selector offers virtual warehouses too, and nothing here reserves or moves stock.
 		"Quotation": "public/js/quotation_stock_visibility.js",
-		# A read-only net/gross/volume panel. The server computes it from the receipt's own
-		# quantities and measurement snapshots; the script never edits the document.
-		"Purchase Receipt": "public/js/purchase_receipt_measurements.js",
+		# A read-only net/gross/volume panel, and the warehouse selectors. The server computes
+		# the panel from the receipt's own quantities and measurement snapshots; the selectors
+		# only add a type line under each warehouse name and store the same name. Neither script
+		# edits the document.
+		"Purchase Receipt": [
+			"public/js/purchase_receipt_measurements.js",
+			"public/js/purchase_receipt_warehouses.js",
+		],
 		# The two buttons that export this app's records and import them back. They live on the
 		# Settings single because that is where an administrator looks for them, and they are the
 		# only supported way to carry the history across a removal. The classification table

@@ -51,6 +51,8 @@
   "sp_show_quotation_warehouse_stock",
   "sp_show_so_item_stock",
   "sp_show_so_warehouse_stock",
+  "receipt_display_section",
+  "sp_show_pr_warehouse_type",
   "interop_tab",
   "interop_section",
   "interop_registry"
@@ -342,6 +344,19 @@
    "label": "موجودی کالا در فهرست انبارهای سفارش فروش"
   },
   {
+   "description": "نمایش یا پنهان‌کردن خط نوع انبار در فهرست انتخاب انبار رسید خرید. این کلید فقط نمایش است و طبقه‌بندی، موجودی یا هیچ سندی را تغییر نمی‌دهد.",
+   "fieldname": "receipt_display_section",
+   "fieldtype": "Section Break",
+   "label": "نمایش نوع انبار در رسید خرید"
+  },
+  {
+   "default": "1",
+   "description": "اگر روشن باشد، زیر نام هر انبار در فهرست انتخاب انبار رسید خرید، نوع آن (فیزیکی، مجازی یا در راه) در خط دوم کوچک‌تر نمایش داده می‌شود. خاموش‌کردن آن فقط همین خط را برمی‌دارد: فهرست انبارها، جست‌وجو، فیلترها و انباری که انتخاب می‌شود تغییری نمی‌کند.",
+   "fieldname": "sp_show_pr_warehouse_type",
+   "fieldtype": "Check",
+   "label": "نوع انبار در انتخاب انبار رسید خرید"
+  },
+  {
    "fieldname": "interop_tab",
    "fieldtype": "Tab Break",
    "label": "وابستگی‌ها و تغییرات بین‌ماژولی"
@@ -360,7 +375,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-11-16 18:10:00.000000",
+ "modified": "2026-11-23 02:15:57.818069",
  "modified_by": "Administrator",
  "module": "SmartProcess Logistics",
  "name": "Logistics Settings",

@@ -26,7 +26,9 @@ frappe.query_reports["تراز موجودی"] = {
 	],
 
 	formatter: function (value, row, column, data, default_formatter) {
-		const text = default_formatter(value, row, column, data);
+		const text = column.sp_quantity
+			? smartprocess_logistics.report_defaults.quantity(value, row, column, data, default_formatter)
+			: default_formatter(value, row, column, data);
 
 		if (column.fieldname === "related_quotations" || column.fieldname === "related_sales_orders") {
 			if (!data || !data[column.fieldname]) {
@@ -43,5 +45,9 @@ frappe.query_reports["تراز موجودی"] = {
 		}
 
 		return text;
+	},
+
+	onload: function (report) {
+		smartprocess_logistics.report_defaults.apply(report);
 	},
 };

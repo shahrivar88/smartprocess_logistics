@@ -23,4 +23,16 @@ frappe.query_reports["Warehouse Inventory"] = {
 		},
 		{ fieldname: "include_zero_stock", label: __("نمایش موجودی صفر"), fieldtype: "Check", default: 0 },
 	],
+
+	formatter(value, row, column, data, default_formatter) {
+		if (column.sp_quantity) {
+			return smartprocess_logistics.report_defaults.quantity(value, row, column, data, default_formatter);
+		}
+
+		return default_formatter(value, row, column, data);
+	},
+
+	onload(report) {
+		smartprocess_logistics.report_defaults.apply(report);
+	},
 };

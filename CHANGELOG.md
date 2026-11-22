@@ -5,6 +5,35 @@ All notable changes to `smartprocess_logistics`.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.9 — 2026-11-23
+
+**The receipt's warehouse selector names each warehouse's type, every report opens on a usable
+company and date window, quantity columns show whole numbers as whole numbers, and an Item's
+serial flag now says what it does.**
+
+### Added
+
+- **Purchase Receipt shows the warehouse's type under its name.** `purchase_receipt_warehouses`
+  serves the same leaf, enabled, company-scoped list the native Link serves, with the kind
+  (`فیزیکی`, `مجازی`, `در راه`) as the description line. `Logistics Settings` gains
+  `sp_show_pr_warehouse_type` to hide that line; the stored value is still the warehouse's name,
+  and no warehouse is added, removed or renamed in either state.
+- **Reports open on a company and a date window.** `report_filter_defaults` returns the reader's
+  default company when their permissions reach it — the first company they may read otherwise,
+  and no company they cannot read ever — with `from_date` at the start of the `Fiscal Year`
+  containing today and `to_date` today. Every report calls `report_defaults.apply` when it opens,
+  and a filter the reader has already filled is never replaced.
+- **Quantity columns display whole numbers without decimal places.** A fractional quantity keeps
+  every digit it really has; nothing is rounded and no stored value is modified.
+
+### Changed
+
+- **`Item.sp_serial_required` is labelled «نیازمند ثبت سریال در لجستیک».** The field, its default
+  and its behaviour are unchanged: it stays independent of `has_serial_no`, defaults to off for
+  every existing Item, and the missing-serials report reads it as before.
+- **Report data is drawn at a regular weight,** with the heading row keeping its emphasis. The
+  rule is scoped to the report pages this app opens.
+
 ## 0.7.8 — 2026-11-18
 
 **The app now authorizes every write the CRUD path can reach, derives a serial's identity on the

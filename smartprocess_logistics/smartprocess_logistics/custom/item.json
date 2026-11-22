@@ -8,7 +8,7 @@
    "fieldtype": "Check",
    "in_standard_filter": 1,
    "insert_after": "has_serial_no",
-   "label": "نیازمند شماره سریال",
+   "label": "نیازمند ثبت سریال در لجستیک",
    "module": "SmartProcess Logistics"
   },
   {

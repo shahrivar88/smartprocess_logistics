@@ -82,7 +82,8 @@ class TestPurchaseReceiptPanel(UnitTestCase):
 		hooks = source(APP / "hooks_composition.py")
 		panel = source(APP / "public" / "js" / "purchase_receipt_measurements.js")
 
-		self.assertIn('"Purchase Receipt": "public/js/purchase_receipt_measurements.js"', hooks)
+		self.assertIn('"Purchase Receipt": [', hooks)
+		self.assertIn('"public/js/purchase_receipt_measurements.js"', hooks)
 		self.assertIn("purchase_receipt_measurements.purchase_receipt_measurements", panel)
 		self.assertIn("frm.dashboard.add_section", panel)
 		self.assertIn("وزن خالص پذیرفته‌شده", panel)
